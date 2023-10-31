@@ -20,11 +20,11 @@ int weigherSocketFd = -1;
 static time_t sensorEventRAWTime = 0;
 static time_t sensorEventRAWTimePrev = 0;
 
-volatile static int sensorScannerEventFlag = 0;
-volatile static int sensorWeigherEventFlag = 0;
+volatile static int sensorScannerEventFlag = FALSE;
+volatile static int sensorWeigherEventFlag = FALSE;
 
-volatile static int scannerConnected = 0;
-volatile static int weigherConnected = 0;
+volatile static int scannerConnected = FALSE;
+volatile static int weigherConnected = FALSE;
 
 struct stStationConfig stationConfig;
 struct stWeightRecord  weightRecord;
@@ -80,16 +80,57 @@ void sensorEvent( void )
 
 // Threads implementations
 /**
+  void *connScannerLoop( void *arg )
 */
 void *connScannerLoop( void *arg )
 {
-  while( TRUE ) {
+  int scannerClientFd = -1;
+  struct sockaddr_in serv_addr;
+  uint16_t scannerPort = SCANNER_PORT_DEFAULT;
 
-    usleep( SLEEP_5MS );
+  scannerPort = uint16_t( atoi( stationConfig.scannerPort ));
+  serv_addr.sin_family = AF_INET;
+  serv_addr.sin_port = htons( scannerPort );
+
+  if( inet_pton( AF_INET, stationConfig.scannerIPAddr, &serv_addr.sin_addr ) <= 0 ) {
+    printLog( "Error: Invalid address/ Address not supported, exit\n" );
+    exit( 1 );
+  }
+
+  //  thread main loop
+  while( TRUE ) {
+    while( !scannerConnected ) {
+     if(( scannerSocketFd = socket( AF_INET, SOCK_STREAM, 0 )) < 0 ) {
+        printLog( "Error: Socket creation error, exit\n" );
+        exit( 1 );
+      }
+
+      printLog( "Trying to connect to the the scanner [%s:%s]\n", stationConfig.scannerIPAddr, stationConfig.scannerPort );
+      fprintf( stderr, "Trying to connect to the the scanner [%s:%s]\n", stationConfig.scannerIPAddr, stationConfig.scannerPort );
+
+      scannerClientFd = connect( scannerSocketFd, (struct sockaddr*) &serv_addr, sizeof( serv_addr ));
+
+      if( scannerClientFd < 0 ) {
+        scannerConnected = FALSE;
+        printLog( "Connection to scanner failed: %s\n", strerror( errno ));
+        fprintf( stderr, "Connection to scanner failed: %s\n", strerror( errno ));
+        shutdown( scannerSocketFd, SHUT_RDWR ); // test: shutdown
+        close( scannerSocketFd );
+        usleep( SLEEP_2S );
+      } else {
+        scannerConnected = TRUE;
+        printLog( "Connection to scanner OK\n" );
+        fprintf( stderr, "Connection to scanner OK\n" );
+        setNonblock( scannerSocketFd );
+      }
+    }
+
+    usleep( SLEEP_100MS );
   }
 }
 
 /**
+  void *connWeigherLoop( void *arg )
 */
 void *connWeigherLoop( void *arg )
 {
@@ -104,99 +145,91 @@ void *connWeigherLoop( void *arg )
 */
 void *scannerLoop( void *arg )
 {
-  int scannerClientFd = -1;
+
   size_t nsend = 0;
-  int nread = 0;
-  struct sockaddr_in serv_addr;
+  ssize_t nread = 0;
+  uint16_t recvCnt = 0;
+
   char msg[SCANNER_SEND_MSG_SZ] = { 0 };
   char buf[SCANNER_RECV_BUF_SZ] = { 0 };
-  uint16_t scannerPort = SCANNER_PORT_DEFAULT;
 
-  pinSetup();
+  pinSetup();   // setup GPIO pin
 
-  scannerPort = uint16_t( atoi( stationConfig.scannerPort ));
-  serv_addr.sin_family = AF_INET;
-  serv_addr.sin_port = htons( scannerPort );
-
-  if( inet_pton( AF_INET, stationConfig.scannerIPAddr, &serv_addr.sin_addr ) <= 0 ) {
-    printLog( "Error: Invalid address/ Address not supported, exit\n" );
-    exit( 1 );
-  }
-
-  //  thread main loop
   while( TRUE ) {
-   if(( scannerSocketFd = socket( AF_INET, SOCK_STREAM, 0 )) < 0 ) {
-      printLog( "Error: Socket creation error, exit\n" );
-      exit( 1 );
+    // check the receive buffer, it must be empty
+    if( scannerConnected ) {
+      if( recv( scannerSocketFd, buf, sizeof( buf ), MSG_PEEK ) > 0 ) {
+        fprintf( stderr, "recv buffer isn't empty\n" );
+        flushRecvBuffer( scannerSocketFd );
+      }
     }
 
-    printLog( "Trying to connect to the the scanner [%s:%s]\n", stationConfig.scannerIPAddr, stationConfig.scannerPort );
+    if( sensorScannerEventFlag ) {
+      sensorScannerEventFlag = FALSE;
+      memset( buf, 0, sizeof( buf ));
 
-    scannerClientFd = connect( scannerSocketFd, (struct sockaddr*) &serv_addr, sizeof( serv_addr ));
+      if( scannerConnected ) {
+        strcpy( msg, SCANNER_START_TRIG_MSG );
+        nsend = send( scannerSocketFd, msg, strlen( msg ), 0 );
 
-    if( scannerClientFd < 0 ) {
-      printLog( "Connection to scanner failed: %s\n", strerror( errno ));
-      close( scannerSocketFd );
-      usleep( SLEEP_100MS );
-    } else {
-      printLog( "Connection to scanner OK\n" );
+        printLog( "> Send: %d bytes [%s]\n", nsend, msg );
+        fprintf( stderr, "> Send: %d bytes [%s]\n", nsend, msg );
 
-      setNonblock( scannerSocketFd );
+        if( nsend < 0 ) {
+          printLog( "Send error: %s\n", strerror( errno ) );
+          close( scannerSocketFd ); // closing the connected socket
+          break; // trying to reconnect
+        } else {
+          printLog( "> Read\n" );
+          fprintf( stderr, "> Read\n" );
+          recvCnt = 0;
 
-      while( TRUE ) {
-        if( sensorScannerEventFlag ) {
-          sensorScannerEventFlag = FALSE;
+          // while(( nread = read( scannerSocketFd, buf, sizeof( buf ))) < 0 ) {
+          while(( nread = recv( scannerSocketFd, buf, sizeof( buf ), 0 )) < 0 ) {
+            recvCnt++;
+            usleep( SLEEP_10MS );
+            if( recvCnt >= SCANNER_MAX_RECV_CNT ) break;
+          }
+          fprintf( stderr, "recvCnt = %d\n", recvCnt );
 
-          memset( buf, 0, sizeof( buf ));
-          strcpy( msg, SCANNER_START_TRIG_MSG );
-          nsend = send( scannerSocketFd, msg, strlen( msg ), 0 );
-
-          printLog( "> Send: %d bytes [%s]\n", nsend, msg );
-
-          if( nsend < 0 ) {
-            printLog( "Send error: %s\n", strerror( errno ) );
-            close( scannerSocketFd ); // closing the connected socket
-            break; // trying to reconnect
+          if( nread < 0 ) {
+            printLog( "Read error: %s\n", strerror( errno ));
+            fprintf( stderr, "Read error: %s\n", strerror( errno ));
+            scannerConnected = FALSE;
+            strcpy( buf, BARCODE_DEFAULT );
           } else {
-            printLog( "> Read\n" );
-
-            int recvCnt = 0;
-
-            while(( nread = read( scannerSocketFd, buf, sizeof( buf ))) < 0 ) {
-              recvCnt++;
-              usleep( SLEEP_10MS );
-              if( recvCnt >= SCANNER_MAX_RECV_CNT ) break;
-            }
-
-            if( nread < 0 ) {
-              printLog( "Read error: %s\n", strerror( errno ) );
-              close( scannerSocketFd ); // closing the connected socket
-              break; // trying to reconnect
-            } else {
-              // replace last terminatinп character with \0
-              if( nread > 0 ) {
-                if( isdigit( buf[nread - 1] ) ) {
-                  buf[nread] = '\0';
-                } else {
-                  buf[nread -1 ] = '\0';
-                }
-                printLog( "nread = %d: [%s]\n", nread, buf );
+            // replace last terminatinп character with \0
+            if( nread > 0 ) {
+              if( isdigit( buf[nread - 1] ) ) {
+                buf[nread] = '\0';
               } else {
-                strcpy( buf, BARCODE_DEFAULT );
+                buf[nread - 1] = '\0';
               }
-
-              // filling barcode
-              strcpy( currTUParam.barcode, buf );
+              printLog( "nread = %d: [%s]\n", nread, buf );
+              fprintf( stderr, "nread = %d: [%s]\n", nread, buf );
+            } else {
+              strcpy( buf, BARCODE_DEFAULT );
             }
           }
         }
+      } else { // scannerConnected
+        strcpy( buf, BARCODE_NOCONN );
+      } // !scannerConnected
 
-        usleep( SLEEP_1MS );
-      } // while( TRUE )
+
+      // print hex
+      for( size_t i = 0; buf[i]; i++ ) {
+        fprintf( stderr, "%02X ", buf[i] );
+      }
+      fprintf( stderr, "\n" );
+      // end of print hex
+
+      // filling barcode
+      strcpy( currTUParam.barcode, buf );
     }
 
-    usleep( SLEEP_2S ); // reconnection timeout
-  }
+    usleep( SLEEP_1MS );
+  } // while( TRUE )
 
   return NULL;
 }
@@ -379,30 +412,19 @@ void *checkDBLoop( void *arg )
   return NULL;
 }
 
-#if 0
-/**
-*/
-void *sendCurlLoop( void *arg )
-{
-  while( TRUE ) {
-
-    usleep( SLEEP_1MS );
-  }
-
-  return NULL;
-}
-#endif // 0
-
 /**
 */
 void setNonblock( int socket )
 {
-  int flags;
+  int flags = -1;
+
   flags = fcntl( socket, F_GETFL, 0 );
+
   if( flags == -1 ) {
     printLog( "Error: (O_NONBLOCK) fcntl returns -1, exit\n" );
     exit( 1 );
   }
+
   fcntl( socket, F_SETFL, flags | O_NONBLOCK );
 }
 
@@ -413,9 +435,26 @@ unsigned int getWeightTest()
   unsigned int retVal = 0;
 
   retVal = ( 1000 * ( 1 + (unsigned int )( rand() % 9))) + (unsigned int)( rand() % 1000 );
-
   printLog( "dummy weight = [%u]\n", retVal );
 
   return( retVal );
+}
+
+/**
+*/
+int flushRecvBuffer( int socket )
+{
+  uint16_t recvCnt = 0;
+  ssize_t nread = -1;
+  char buf[SCANNER_RECV_BUF_SZ] = { 0 };
+
+  fprintf( stderr, "Flushing recv buffer\n" );
+  while(( nread = recv( socket, buf, sizeof( buf ), 0 )) < 0 ) {
+    recvCnt++;
+    usleep( SLEEP_10MS );
+    if( recvCnt >= SCANNER_MAX_RECV_CNT ) break;
+  }
+
+  return( 0 );
 }
 

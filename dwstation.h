@@ -77,6 +77,7 @@
 #define SCANNER_PORT_DEFAULT      2001
 #define SCANNER_MAX_RECV_CNT      100 // recv up to ... times
 #define BARCODE_DEFAULT           "99999999999999\0" // 14 digits
+#define BARCODE_NOCONN            "NoConn\0"
 
 #define CHECK_DB_DELAY            ( 500 * 1000 ) // 500ms
 
@@ -86,7 +87,7 @@
 #define SLEEP_100MS              ( 100 * 1000 ) // 100 ms
 #define SLEEP_2S                 ( 2 * 1000 * 1000 ) // 2 s
 
-#define LOG_FILE_FLUSH_INTERVAL  300 // seconds
+#define LOG_FILE_FLUSH_INTERVAL  60 // seconds
 #define LOG_FILE_NAME_SZ         256
 #define LOG_BUF_SZ               512
 #define SYS_CMD_SZ               128
@@ -136,6 +137,7 @@ extern int isCfgOK;
 void handlersSetup( void );
 void pinSetup( void );
 void sensorEvent( void );
+int flushRecvBuffer( int socket );
 
 void *connScannerLoop( void *arg );
 void *connWeigherLoop( void *arg );
