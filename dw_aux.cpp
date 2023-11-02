@@ -35,9 +35,19 @@ static void ctrlCHandler( int signum )
     close( scannerSocketFd );
   }
 
-  if( SQLCfgConn ) {
-    printLog( "Connection to MySQL closed\n" );
-    mysql_close( SQLCfgConn );
+  if( SQLConnConfig ) {
+    printLog( "Connection to MySQL (station configuration) closed\n" );
+    mysql_close( SQLConnConfig );
+  }
+
+  if( SQLConnNewTU ) {
+    printLog( "Connection to MySQL (new TU) closed\n" );
+    mysql_close( SQLConnNewTU );
+  }
+
+  if( SQLConnCheckSend ) {
+    printLog( "Connection to MySQL (check send) closed\n" );
+    mysql_close( SQLConnCheckSend );
   }
 
   printLog( "\nCtrl-C detected\n%s terminated\n", appName );
@@ -86,8 +96,8 @@ int openLog( void )
   struct tm tm = *localtime( &T );
   char logFileName[LOG_FILE_NAME_SZ] = { 0 };
   char sysCmd[SYS_CMD_SZ] = { 0 };
-  unsigned int i = 0;
-  unsigned int nAttempts = 10;
+  uint16_t i = 0;
+  uint16_t nAttempts = 10;
 
   sprintf( errLogFileName, "%sdwstation-error-%04d-%02d-%02d-%02d.%02d.%02d.log"
          , errLogsPath, tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec );
@@ -117,7 +127,7 @@ int openLog( void )
 */
 void printLog( const char *format, ... )
 {
-  static unsigned short semaphore = 0;
+  static uint8_t semaphore = 0;
   time_t T = time( NULL );
   struct tm tm = *localtime( &T );
   char timestr[TIME_STR_SZ] = { 0 };
@@ -136,7 +146,7 @@ void printLog( const char *format, ... )
   va_start( ptr, format );
 
   if( semaphore ) {
-    for ( int i = 1; i < 8; i++ ) {
+    for ( uint8_t i = 1; i < 8; i++ ) {
       usleep( i * 1000 );
 
       if( semaphore == 0 ) {
@@ -157,6 +167,8 @@ void printLog( const char *format, ... )
   while( *logBufLoweredPtr++ ) *logBufLoweredPtr = tolower( *logBufLoweredPtr );
 
   vfprintf( logFile, format, ptr );
+  if( DEBUG ) vfprintf( stderr, format, ptr ); // ### DEBUG
+
 
   if( strstr( logBuf, "error" )) {
     errLogFile = fopen( errLogFileName, "a" );
@@ -181,12 +193,12 @@ void printLog( const char *format, ... )
 
 /**
 */
-int check12( void )
+int checkTimeLogReopen( void )
 {
-  static int hourPrev = 0;
-  static int minutePrev = 0;
-  int hour = 0;
-  int minute = 0;
+  static uint8_t hourPrev = 0;
+  static uint8_t minutePrev = 0;
+  uint8_t hour = 0;
+  uint8_t minute = 0;
 
   time_t T = time( NULL );
   struct tm tm = *localtime( &T );
@@ -229,8 +241,48 @@ void flushLogFileBuffer( void )
 
     if( logFileUpdated ) {
       logFileUpdated = 0; // reset flag
-      printLog( "Flushing log file buffer\n" );
+      // printLog( "Flushing log file buffer\n" ); // ###
       fflush( logFile );
     }
   }
+}
+
+/**
+*/
+int flushRecvBuffer( int socket )
+{
+  uint16_t recvCnt = 0;
+  char buf[SCANNER_RECV_BUF_SZ] = { 0 };
+
+  fprintf( stderr, "Flushing receive buffer\n" );
+
+  while( recv( socket, buf, sizeof( buf ), 0 ) < 0 ) {
+    recvCnt++;
+    if( recvCnt >= SCANNER_MAX_RECV_CNT ) break;
+    usleep( SLEEP_10MS );
+  }
+
+  return( 0 );
+}
+
+/**
+  -----------------------------------------------------------------------------
+  Function name:  getTimeDeltaMS
+  -----------------------------------------------------------------------------
+  Purpose:        Calculate time difference in milliseconds
+  Parameters:     t0: event start time
+                  t1: event end time
+  Return:         Time difference between events t0 and t1
+*/
+unsigned int getTimeDeltaMS( unsigned int t0, unsigned int t1 )
+{
+  unsigned int retVal = 0;
+
+  if( t1 >= t0 ) {
+    retVal = t1 - t0;
+  } else {
+    retVal = UINT_MAX - t0 + t1;
+  }
+
+  return retVal;
 }

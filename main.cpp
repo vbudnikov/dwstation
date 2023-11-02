@@ -9,20 +9,24 @@
 const char *nowToday = "Build " __DATE__ " " __TIME__;
 const char *appName  = "dwstation";
 
-pthread_t tid[THREADS_NUM] = { 0 };
+MYSQL *SQLConnConfig = NULL;
 
-MYSQL *SQLCfgConn = NULL;
-MYSQL_RES *SQLSelectResult = NULL;
-int isSQLInited = 0;
-int isSQLConnected = 0;
-int isSelectCfgOK = 0;
-int isCfgOK = 0;
+
+pthread_t tid[THREADS_NUM] = { 0 };
 
 /**
   int main()
 */
 int main( int argc, char **argv )
 {
+  MYSQL_RES *SQLSelectResult = NULL;
+  MYSQL_ROW row = NULL; // for current row parsing
+  int SQLInited = 0;
+  int SQLConnected = 0;
+  int stationConfigSelectOK = 0;
+  int stationConfigOK = 0;
+  int stationConfigNumFields = 0;
+
   int errThread = 0;
 
   printCurrTime();
@@ -38,67 +42,88 @@ int main( int argc, char **argv )
   printLog( "Getting station configuration\n" );
 
   // Config from MySQL
-  if(( SQLCfgConn = mysql_init( NULL )) == NULL ) {
-    printLog( "SQL init error: %s\n", mysql_error( SQLCfgConn ));
-    isSQLInited = FALSE;
+  if(( SQLConnConfig = mysql_init( NULL )) == NULL ) {
+    printLog( "SQL (config): init error: %s\n", mysql_error( SQLConnConfig ));
+    SQLInited = FALSE;
   } else {
-    isSQLInited = TRUE;
-    printLog( "SQL init OK\n" );
+    SQLInited = TRUE;
+    printLog( "SQL (config): init OK\n" );
   }
 
-  if( mysql_real_connect( SQLCfgConn, "127.0.0.1", "dwstation", "dwstation", "dwstation", 0, NULL, 0 ) == NULL ) {
-    printLog( "SQL connect error: %s\n", mysql_error( SQLCfgConn ));
-    isSQLConnected = FALSE;
+  if( mysql_real_connect( SQLConnConfig, "127.0.0.1", "dwstation", "dwstation", "dwstation", 0, NULL, 0 ) == NULL ) {
+    printLog( "SQL (config): connect error: %s\n", mysql_error( SQLConnConfig ));
+    SQLConnected = FALSE;
   } else {
-    isSQLConnected = TRUE;
-    printLog( "SQL connect OK\n" );
+    SQLConnected = TRUE;
+    printLog( "SQL (config): connect OK\n" );
   }
 
-  if( isSQLInited && isSQLConnected ) {
-    // Getting station configuration data
-    if( mysql_query( SQLCfgConn
-                  , "SELECT http_service_addr,login,password,user_id,scannerIPAddr,scannerPort,weigherIPAddr,weigherPort" \
+  if( SQLInited && SQLConnected ) {
+    // Getting config data
+    if( mysql_query( SQLConnConfig
+                  , "SELECT http_service_addr,login,password,user_id,scannerIPAddr,scannerPort,weigherIPAddr,weigherPort"
                     " FROM T_dw00conf ORDER BY timestamp DESC limit 1" )) {
-      printLog( "Station config: SELECT query error: %s\n", mysql_sqlstate( SQLCfgConn ));
-      isSelectCfgOK = FALSE;
+      printLog( "SQL (config): select error: %s\n", mysql_sqlstate( SQLConnConfig ));
+      stationConfigSelectOK = FALSE;
     } else {
-      isSelectCfgOK = TRUE;
-      printLog( "SQL select config OK\n" );
+      stationConfigSelectOK = TRUE;
+      printLog( "SQL (config): select config OK\n" );
     }
 
-    if( isSelectCfgOK ) {
-      SQLSelectResult = mysql_store_result( SQLCfgConn );
+    if( stationConfigSelectOK ) {
+      SQLSelectResult = mysql_store_result( SQLConnConfig );
+
       if( SQLSelectResult == NULL ) {
-        printLog( "SLQ store config result error: %s\n", mysql_sqlstate( SQLCfgConn ));
+        printLog( "SQL (config): store config result error: %s\n", mysql_sqlstate( SQLConnConfig ));
       } else {
-        int num_fields = mysql_num_fields( SQLSelectResult );
-        if( num_fields == ( CFG_LAST_INDEX )) {
-          isCfgOK = TRUE;
-          printLog( "SQL store config result OK\n" );
+        stationConfigNumFields = mysql_num_fields( SQLSelectResult );
+
+        if( stationConfigNumFields == ( CFG_LAST_INDEX )) {
+          stationConfigOK = TRUE;
+          printLog( "SQL (config): station config OK\n" );
         } else {
-          isCfgOK = FALSE;
-          printLog( "SQL store config result error\n" );
+          stationConfigOK = FALSE;
+          printLog( "SQL (config): station config error: wrong number of fields\n" );
         }
 
-        MYSQL_ROW row = NULL;
-        row = mysql_fetch_row( SQLSelectResult );
-        if( row ) {
-          if( row[CFG_SERVER_ADDR_INDEX] ) strcpy( stationConfig.serverAddr,    row[CFG_SERVER_ADDR_INDEX] );
-          if( row[CFG_LOGIN_INDEX] )       strcpy( stationConfig.login,         row[CFG_LOGIN_INDEX] );
-          if( row[CFG_PASSWORD_INDEX] )    strcpy( stationConfig.password,      row[CFG_PASSWORD_INDEX] );
-          if( row[CFG_USER_ID_INDEX] )     strcpy( stationConfig.user_id,       row[CFG_USER_ID_INDEX] );
-          if( row[CFG_SCANNER_IP_ADDR] )   strcpy( stationConfig.scannerIPAddr, row[CFG_SCANNER_IP_ADDR] );
-          if( row[CFG_SCANNER_PORT] )      strcpy( stationConfig.scannerPort,   row[CFG_SCANNER_PORT] );
-          if( row[CFG_WEIGHER_IP_ADDR] )   strcpy( stationConfig.weigherIPAddr, row[CFG_WEIGHER_IP_ADDR] );
-          if( row[CFG_WEIGHR_PORT] )       strcpy( stationConfig.weigherPort,   row[CFG_WEIGHR_PORT] );
+        if( stationConfigOK ) {
+          row = mysql_fetch_row( SQLSelectResult );
+
+          if( row ) {
+            if( row[CFG_SERVER_ADDR_INDEX] ) strcpy( stationConfig.serverAddr,    row[CFG_SERVER_ADDR_INDEX] );
+            if( row[CFG_LOGIN_INDEX] )       strcpy( stationConfig.login,         row[CFG_LOGIN_INDEX] );
+            if( row[CFG_PASSWORD_INDEX] )    strcpy( stationConfig.password,      row[CFG_PASSWORD_INDEX] );
+            if( row[CFG_USER_ID_INDEX] )     strcpy( stationConfig.user_id,       row[CFG_USER_ID_INDEX] );
+            if( row[CFG_SCANNER_IP_ADDR] )   strcpy( stationConfig.scannerIPAddr, row[CFG_SCANNER_IP_ADDR] );
+            if( row[CFG_SCANNER_PORT] )      strcpy( stationConfig.scannerPort,   row[CFG_SCANNER_PORT] );
+            if( row[CFG_WEIGHER_IP_ADDR] )   strcpy( stationConfig.weigherIPAddr, row[CFG_WEIGHER_IP_ADDR] );
+            if( row[CFG_WEIGHR_PORT] )       strcpy( stationConfig.weigherPort,   row[CFG_WEIGHR_PORT] );
+          } else {
+            printLog( "SQL fetch row error, exit\n" );
+            exit( 1 );
+          }
+        } else {
+          printLog( "SQL config structure error, exit\n" );
+          exit( 1 );
         }
+
+        mysql_free_result( SQLSelectResult );
       }
     } else {
-      printLog( "Error: Unable to get configuration from database, exit\n" );
+      printLog( "Error: Unable to get configuration from DB, exit\n" );
       exit( 1 );
     }
+  } else {
+    printLog( "Error: SQL init or connect failed, exit\n" );
+    exit( 1 );
   }
 
+  // station configuration has been successfully processed, you can close the connection to the database
+  if( SQLConnConfig ) {
+    printLog( "Connection to MySQL (config) closed\n" );
+    mysql_close( SQLConnConfig );
+    SQLConnConfig = NULL;
+  }
 
   // Threads
   errThread = pthread_create( &(tid[THREAD_CONN_SCANNER]), NULL, &connScannerLoop, NULL );
@@ -128,12 +153,28 @@ int main( int argc, char **argv )
 
   while( TRUE ) {
     flushLogFileBuffer();
-    check12();
+    checkTimeLogReopen();
 
     usleep( SLEEP_10MS );
   }
 
-  if( SQLCfgConn ) mysql_close( SQLCfgConn );
+  if( SQLConnConfig ) {
+    printLog( "Connection to MySQL (config) closed\n" );
+    mysql_close( SQLConnConfig );
+    SQLConnConfig = NULL;
+  }
+
+  if( SQLConnNewTU ) {
+    printLog( "Connection to MySQL (new TU) closed\n" );
+    mysql_close( SQLConnNewTU );
+    SQLConnNewTU = NULL;
+  }
+
+  if( SQLConnCheckSend ) {
+    printLog( "Connection to MySQL (check DB, send to server) closed\n" );
+    mysql_close( SQLConnCheckSend );
+    SQLConnCheckSend = NULL;
+  }
 
   return 0;
 }

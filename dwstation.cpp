@@ -11,14 +11,21 @@
 #include <errno.h>
 #include <wiringPi.h>
 #include <curl/curl.h>
+#include <netinet/tcp.h>
 
 #include "dwstation.h"
+
+MYSQL *SQLConnNewTU = NULL;
+MYSQL *SQLConnCheckSend = NULL;
 
 int scannerSocketFd = -1;
 int weigherSocketFd = -1;
 
 static time_t sensorEventRAWTime = 0;
 static time_t sensorEventRAWTimePrev = 0;
+
+static time_t sensorEventRAWTimeMS = 0;
+static time_t sensorEventRAWTimeMSPrev = 0;
 
 volatile static int sensorScannerEventFlag = FALSE;
 volatile static int sensorWeigherEventFlag = FALSE;
@@ -45,6 +52,9 @@ void pinSetup( void )
   // setting time values
   sensorEventRAWTime = time( NULL );
   sensorEventRAWTimePrev = sensorEventRAWTime;
+
+  sensorEventRAWTimeMS = millis();
+  sensorEventRAWTimeMSPrev = sensorEventRAWTimeMS;
 }
 
 /**
@@ -52,28 +62,31 @@ void pinSetup( void )
 void sensorEvent( void )
 {
   int pinData = 0;
-  time_t delta = 0;
+  time_t deltaMS = 0;
 
   usleep( SENSOR_EVENT_DELAY );
 
-  sensorEventRAWTime = time( NULL );
+  sensorEventRAWTimeMS = millis();
+
   pinData = digitalRead( PIN_DAT );
 
   if( pinData == 1 ) {
     return; // bad interrupt
   }
 
-  delta = sensorEventRAWTime - sensorEventRAWTimePrev;
-  sensorEventRAWTimePrev = sensorEventRAWTime;
+  deltaMS = getTimeDeltaMS( sensorEventRAWTimeMSPrev, sensorEventRAWTimeMS );
+  sensorEventRAWTimeMSPrev = sensorEventRAWTimeMS;
 
-  if( delta >= SENSOR_TIME_MIN_BT_UNITS ) {
+  // fprintf( stderr, "Sensor event, time deltaMS = %ldms\n", deltaMS ); // DEBUG
+
+  if( deltaMS >= SENSOR_TIME_MIN_BT_UNITS ) {
     sensorScannerEventFlag = TRUE;
     sensorWeigherEventFlag = TRUE;
 
     currTUParam.barcode[0] = '\0';
     currTUParam.weight[0]  = '\0';
 
-    printLog( "Sensor event, time delta %lds\n", delta );
+    printLog( "Sensor event, time delta = %ums\n", deltaMS );
   }
 }
 
@@ -106,22 +119,28 @@ void *connScannerLoop( void *arg )
       }
 
       printLog( "Trying to connect to the the scanner [%s:%s]\n", stationConfig.scannerIPAddr, stationConfig.scannerPort );
-      fprintf( stderr, "Trying to connect to the the scanner [%s:%s]\n", stationConfig.scannerIPAddr, stationConfig.scannerPort );
+      // fprintf( stderr, "Trying to connect to the the scanner [%s:%s]\n", stationConfig.scannerIPAddr, stationConfig.scannerPort );
 
       scannerClientFd = connect( scannerSocketFd, (struct sockaddr*) &serv_addr, sizeof( serv_addr ));
 
       if( scannerClientFd < 0 ) {
         scannerConnected = FALSE;
         printLog( "Connection to scanner failed: %s\n", strerror( errno ));
-        fprintf( stderr, "Connection to scanner failed: %s\n", strerror( errno ));
+        // fprintf( stderr, "Connection to scanner failed: %s\n", strerror( errno ));
         shutdown( scannerSocketFd, SHUT_RDWR ); // test: shutdown
         close( scannerSocketFd );
         usleep( SLEEP_2S );
       } else {
         scannerConnected = TRUE;
         printLog( "Connection to scanner OK\n" );
-        fprintf( stderr, "Connection to scanner OK\n" );
+        // fprintf( stderr, "Connection to scanner OK\n" );
         setNonblock( scannerSocketFd );
+        int flag = 1; // allways 1
+        if( setsockopt( scannerSocketFd, IPPROTO_TCP, TCP_NODELAY, (char *) &flag, sizeof(int)) < 0 ) {
+          printLog( "setsockopt( TCP_NODELAY ) error: %s\n", strerror( errno ));
+        } else {
+          printLog( "setsockopt( TCP_NODELAY ) OK\n" );
+        }
       }
     }
 
@@ -153,13 +172,13 @@ void *scannerLoop( void *arg )
   char msg[SCANNER_SEND_MSG_SZ] = { 0 };
   char buf[SCANNER_RECV_BUF_SZ] = { 0 };
 
-  pinSetup();   // setup GPIO pin
+  pinSetup(); // setup GPIO pin
 
   while( TRUE ) {
     // check the receive buffer, it must be empty
     if( scannerConnected ) {
       if( recv( scannerSocketFd, buf, sizeof( buf ), MSG_PEEK ) > 0 ) {
-        fprintf( stderr, "recv buffer isn't empty\n" );
+        printLog( "Receive buffer isn't empty\n" );
         flushRecvBuffer( scannerSocketFd );
       }
     }
@@ -173,7 +192,7 @@ void *scannerLoop( void *arg )
         nsend = send( scannerSocketFd, msg, strlen( msg ), 0 );
 
         printLog( "> Send: %d bytes [%s]\n", nsend, msg );
-        fprintf( stderr, "> Send: %d bytes [%s]\n", nsend, msg );
+        // fprintf( stderr, "> Send: %d bytes [%s]\n", nsend, msg );
 
         if( nsend < 0 ) {
           printLog( "Send error: %s\n", strerror( errno ) );
@@ -181,7 +200,7 @@ void *scannerLoop( void *arg )
           break; // trying to reconnect
         } else {
           printLog( "> Read\n" );
-          fprintf( stderr, "> Read\n" );
+          // fprintf( stderr, "> Read\n" );
           recvCnt = 0;
 
           // while(( nread = read( scannerSocketFd, buf, sizeof( buf ))) < 0 ) {
@@ -190,11 +209,11 @@ void *scannerLoop( void *arg )
             usleep( SLEEP_10MS );
             if( recvCnt >= SCANNER_MAX_RECV_CNT ) break;
           }
-          fprintf( stderr, "recvCnt = %d\n", recvCnt );
+          // fprintf( stderr, "recvCnt = %d\n", recvCnt );
 
           if( nread < 0 ) {
             printLog( "Read error: %s\n", strerror( errno ));
-            fprintf( stderr, "Read error: %s\n", strerror( errno ));
+            // fprintf( stderr, "Read error: %s\n", strerror( errno ));
             scannerConnected = FALSE;
             strcpy( buf, BARCODE_DEFAULT );
           } else {
@@ -206,23 +225,23 @@ void *scannerLoop( void *arg )
                 buf[nread - 1] = '\0';
               }
               printLog( "nread = %d: [%s]\n", nread, buf );
-              fprintf( stderr, "nread = %d: [%s]\n", nread, buf );
+              // fprintf( stderr, "nread = %d: [%s]\n", nread, buf );
             } else {
               strcpy( buf, BARCODE_DEFAULT );
             }
           }
         }
-      } else { // scannerConnected
+      } else {
         strcpy( buf, BARCODE_NOCONN );
-      } // !scannerConnected
+      }
 
-
-      // print hex
+      // print msg and hex
+      fprintf( stderr, "[%s]: ", buf );
       for( size_t i = 0; buf[i]; i++ ) {
         fprintf( stderr, "%02X ", buf[i] );
       }
       fprintf( stderr, "\n" );
-      // end of print hex
+      // end of print
 
       // filling barcode
       strcpy( currTUParam.barcode, buf );
@@ -239,8 +258,33 @@ void *scannerLoop( void *arg )
 */
 void *weigherLoop( void *arg )
 {
+  int SQLInited = 0;
+  int SQLConnected = 0;
+  int insertOK = 0;
   unsigned int weight = 0;
-  int isInsertOK = 0;
+
+   // connecting to MySQL
+  if(( SQLConnNewTU = mysql_init( NULL )) == NULL ) {
+    printLog( "SQL (new TU): init error: %s\n", mysql_error( SQLConnNewTU ));
+    SQLInited = FALSE;
+  } else {
+    SQLInited = TRUE;
+    printLog( "SQL (new TU): init OK\n" );
+  }
+
+  if( mysql_real_connect( SQLConnNewTU, "127.0.0.1", "dwstation", "dwstation", "dwstation", 0, NULL, 0 ) == NULL ) {
+    printLog( "SQL (new TU): connect error: %s\n", mysql_error( SQLConnNewTU ));
+    SQLConnected = FALSE;
+  } else {
+    SQLConnected = TRUE;
+    printLog( "SQL (new TU): connect OK\n" );
+  }
+
+  // TODO: implement reconnection
+  if( ! ( SQLInited && SQLConnected )) {
+    printLog( "SQL (new TU): error creating SQL connection, exit" );
+    exit( 1 );
+  }
 
   while( TRUE ) {
     if( sensorWeigherEventFlag ) {
@@ -257,22 +301,27 @@ void *weigherLoop( void *arg )
       if(( currTUParam.barcode[0] != '\0' ) && ( currTUParam.weight[0] != '\0' )) {
         char dquery[DYN_QUERY_SZ] = { 0 };
         sprintf( dquery, "INSERT INTO T_dw00resp (barcode,weight) values ('%s','%s')", currTUParam.barcode, currTUParam.weight );
-        printLog( "New TU: [%s]\n", dquery );
+        printLog( "SQL (new TU): [%s]\n", dquery );
 
-        if( mysql_query( SQLCfgConn, dquery )) {
-          printLog( "INSERT query error: %s\n", mysql_sqlstate( SQLCfgConn ));
-          isInsertOK = FALSE;
+        if( mysql_query( SQLConnNewTU, dquery )) {
+          printLog( "SQL (new TU): insert  error: %s\n", mysql_sqlstate( SQLConnNewTU ));
+          insertOK = FALSE;
         } else {
-          isInsertOK = TRUE;
+          insertOK = TRUE;
         }
 
-        if( isInsertOK ) {
-          printLog( "INSERT query OK\n" );
+        if( insertOK ) {
+          printLog( "SQL (new TU): insert OK\n" );
         }
       }
     } // sensorWeigherEventFlag
 
     usleep( SLEEP_1MS );
+  }
+
+  if( SQLConnNewTU ) {
+    mysql_close( SQLConnNewTU );
+    SQLConnNewTU = NULL;
   }
 
   return NULL;
@@ -284,45 +333,79 @@ void *weigherLoop( void *arg )
 void *checkDBLoop( void *arg )
 {
   // MySQL
-  int isSelectOK = 0;
-  int isUpdateOK = 0;
-  int isRecordFound = 0;
-  MYSQL_ROW row = NULL;
-  unsigned int numFields = 0;
+  MYSQL_RES *SQLSelectResult = NULL;
+  MYSQL_ROW row = NULL;  // for current row parsing
+  int SQLInited = 0;
+  int SQLConnected = 0;
+  int selectOK = 0;
+  int updateOK = 0;
+  int recordFound = 0;
+  unsigned int weightRecordNumFields = 0;
 
   // cURL + JSON
   char json[JSON_BUF_LEN] = { 0 };
   CURL *curl;
   CURLcode curlPerformResult;
+  size_t jsonLen = 0;
+  char userID[PREFIX_SZ + USER_ID_SZ] = { 0 };
+  struct curl_slist *slist = NULL;
   long httpServerResponseCode = 0;
+
+   curl_global_init( CURL_GLOBAL_NOTHING );
+
+   // connecting to MySQL
+  if(( SQLConnCheckSend = mysql_init( NULL )) == NULL ) {
+    printLog( "SQL (check send): init error: %s\n", mysql_error( SQLConnCheckSend ));
+    SQLInited = FALSE;
+  } else {
+    SQLInited = TRUE;
+    printLog( "SQL (check send): init OK\n" );
+  }
+
+  if( mysql_real_connect( SQLConnCheckSend, "127.0.0.1", "dwstation", "dwstation", "dwstation", 0, NULL, 0 ) == NULL ) {
+    printLog( "SQL (check send): connect error: %s\n", mysql_error( SQLConnCheckSend ));
+    SQLConnected = FALSE;
+  } else {
+    SQLConnected = TRUE;
+    printLog( "SQL (check send): connect OK\n" );
+  }
+
+  // TODO: implement reconnection
+  if( ! ( SQLInited && SQLConnected )) {
+    printLog( "SQL (check send): error creating SQL connection, exit" );
+    exit( 1 );
+  }
 
   printLog( "Checking the DB for new records\n" );
 
   while( TRUE ) {
     // Getting weight data
-    if( isSQLInited && isSQLConnected && isCfgOK ) {
+    if( SQLInited && SQLConnected ) {
       // First not processed weight record
-      if( mysql_query( SQLCfgConn, "SELECT uid,barcode,weight,timestamp,status FROM T_dw00resp WHERE status=0 ORDER BY timestamp ASC limit 1" )) {
-        isSelectOK = FALSE;
-        printLog( "Weight data: SELECT query error: %s\n", mysql_sqlstate( SQLCfgConn ));
+      if( mysql_query( SQLConnCheckSend
+                     , "SELECT uid,barcode,weight,timestamp,status FROM T_dw00resp"
+                       " WHERE status=0 ORDER BY timestamp ASC limit 1" )) {
+        selectOK = FALSE;
+        printLog( "SQL (check send): select weight data error: %s\n", mysql_sqlstate( SQLConnCheckSend ));
       } else {
-        isSelectOK = TRUE;
+        selectOK = TRUE; // Don't log this result
       }
 
-      if( isSelectOK ) {
-        SQLSelectResult = mysql_store_result( SQLCfgConn );
+      if( selectOK ) {
+        SQLSelectResult = mysql_store_result( SQLConnCheckSend );
+
         if( SQLSelectResult == NULL ) {
-          printLog( "SLQ store result error: %s\n", mysql_sqlstate( SQLCfgConn ));
+          printLog( "SQL (check send): store result error: %s\n", mysql_sqlstate( SQLConnCheckSend ));
         }
       }
     }
 
     if( SQLSelectResult ) {
-      numFields = mysql_num_fields( SQLSelectResult );
-
+      weightRecordNumFields = mysql_num_fields( SQLSelectResult );
       row = mysql_fetch_row( SQLSelectResult );
+
       if( row ) {
-        isRecordFound = TRUE;
+        recordFound = TRUE;
 
         if( row[UID_INDEX] )       strcpy( weightRecord.uid,       row[UID_INDEX] );
         if( row[BARCODE_INDEX] )   strcpy( weightRecord.barcode,   row[BARCODE_INDEX] );
@@ -330,20 +413,23 @@ void *checkDBLoop( void *arg )
         if( row[TIMESTAMP_INDEX] ) strcpy( weightRecord.timestamp, row[TIMESTAMP_INDEX] );
         if( row[STATUS_INDEX] )    strcpy( weightRecord.status,    row[STATUS_INDEX] );
 
-        printLog( "Selected %d fields: [%s] [%s] [%s] [%s] [%s]\n"
-                , numFields, weightRecord.uid, weightRecord.barcode, weightRecord.weight, weightRecord.timestamp, weightRecord.status );
+        printLog( "SQL (check send): selected %d fields: [%s] [%s] [%s] [%s] [%s]\n"
+                , weightRecordNumFields, weightRecord.uid, weightRecord.barcode
+                , weightRecord.weight, weightRecord.timestamp, weightRecord.status );
       } else {
-        isRecordFound = FALSE;
-        // if( DEBUG ) { printCurrTime(); fprintf( stderr, "No records found\n" ); } // ###
+        recordFound = FALSE;
       }
+
+      mysql_free_result( SQLSelectResult );
     }
     // End of MySQL part
 
     // Curl part
-    if( isRecordFound ) {
-      size_t n = 0;
-      char user_id_str[PREFIX_SZ + USER_ID_SZ] = { 0 };
-      struct curl_slist *slist1 = NULL;
+    if( recordFound ) {
+      printLog( "SQL (check send): new record found\n" );
+
+      jsonLen = 0;
+      memset( userID, 0, sizeof( userID ));
 
       curl = curl_easy_init();
       if( curl == NULL ) {
@@ -351,14 +437,15 @@ void *checkDBLoop( void *arg )
         exit( 1 );
       }
 
-      slist1 = curl_slist_append( slist1, "Content-Type: application/json" );
-      slist1 = curl_slist_append( slist1, "Accept: application/json" );
-      sprintf( user_id_str, "user_id: %s", stationConfig.user_id );
-      slist1 = curl_slist_append( slist1, user_id_str );
-      slist1 = curl_slist_append( slist1, "event_type: Weight_data" );
+      slist = curl_slist_append( NULL, "" );
+      slist = curl_slist_append( slist, "Content-Type: application/json" );
+      slist = curl_slist_append( slist, "Accept: application/json" );
+      sprintf( userID, "user_id: %s", stationConfig.user_id );
+      slist = curl_slist_append( slist, userID );
+      slist = curl_slist_append( slist, "event_type: Weight_data" );
 
       /* set custom headers */
-      curl_easy_setopt( curl, CURLOPT_HTTPHEADER, slist1 );
+      curl_easy_setopt( curl, CURLOPT_HTTPHEADER, slist );
       curl_easy_setopt( curl, CURLOPT_URL, stationConfig.serverAddr );
       curl_easy_setopt( curl, CURLOPT_TIMEOUT, SERVER_COMPLETE_TIMEOUT );
       curl_easy_setopt( curl, CURLOPT_SERVER_RESPONSE_TIMEOUT, SERVER_RESPONSE_TIMEOUT );
@@ -369,9 +456,11 @@ void *checkDBLoop( void *arg )
       // Example: { "ArrayData": [ {"Date": "2023-09-25 09:51:38", "ТЕ": "000025179223", "Weight": "1345" } ] }
       sprintf( json, "{ \"ArrayData\": [ {\"Date\": \"%s\", \"TE\": \"%s\", \"Weight\": \"%s\"  } ] }"
              , weightRecord.timestamp, weightRecord.barcode, weightRecord.weight );
-      n = strlen( json );
+      jsonLen = strlen( json );
 
-      printLog( "Send %zu bytes to [%s]\n", n, stationConfig.serverAddr );
+      printLog( "JSON: %s\n", json );
+
+      printLog( "Send %zu bytes to [%s]\n", jsonLen, stationConfig.serverAddr );
       curl_easy_setopt( curl, CURLOPT_POSTFIELDS, json );
       curlPerformResult = curl_easy_perform( curl );
 
@@ -381,18 +470,18 @@ void *checkDBLoop( void *arg )
 
         if( httpServerResponseCode == HTTP_RESPONSE_CODE_OK ) {
           char dquery[DYN_QUERY_SZ] = { 0 };
-          sprintf( dquery, "UPDATE T_dw00resp SET status='1' WHERE uid='%s'", row[0] );
-          printLog( "Query to update: [%s]\n", dquery );
+          sprintf( dquery, "UPDATE T_dw00resp SET status='1' WHERE uid='%s'", weightRecord.uid );
+          printLog( "SQL (check send): query to update: [%s]\n", dquery );
 
-          if( mysql_query( SQLCfgConn, dquery )) {
-            printLog( "UPDATE query error: %s\n", mysql_sqlstate( SQLCfgConn ));
-            isUpdateOK = FALSE;
+          if( mysql_query( SQLConnCheckSend, dquery )) {
+            printLog( "SQL (check send): update error: %s\n", mysql_sqlstate( SQLConnCheckSend ));
+            updateOK = FALSE;
           } else {
-            isUpdateOK = TRUE;
+            updateOK = TRUE;
           }
 
-          if( isUpdateOK ) {
-            printLog( "UPDATE query OK\n" );
+          if( updateOK ) {
+            printLog( "SQL (check send): update OK\n" );
           }
         }
       } else {
@@ -400,13 +489,18 @@ void *checkDBLoop( void *arg )
         printLog( "res = %d\n", curlPerformResult );
       }
 
+      curl_slist_free_all( slist ); // ### may catch segfault
       curl_easy_cleanup( curl ); // always cleanup
     }
 
     usleep( CHECK_DB_DELAY ); // sleep 500ms
   } // while( TRUE ) // ###
 
-  if( SQLCfgConn ) mysql_close( SQLCfgConn );
+  if( SQLConnCheckSend ) {
+    mysql_close( SQLConnCheckSend );
+    SQLConnCheckSend = NULL;
+  }
+
   curl_global_cleanup();
 
   return NULL;
@@ -430,31 +524,11 @@ void setNonblock( int socket )
 
 /**
 */
-unsigned int getWeightTest()
+uint16_t getWeightTest()
 {
-  unsigned int retVal = 0;
+  uint16_t retVal = 0;
 
-  retVal = ( 1000 * ( 1 + (unsigned int )( rand() % 9))) + (unsigned int)( rand() % 1000 );
-  printLog( "dummy weight = [%u]\n", retVal );
+  retVal = ( 1000 * ( 1 + (uint16_t)( rand() % 10 ))) + (uint16_t)( rand() % 1000 );
 
   return( retVal );
 }
-
-/**
-*/
-int flushRecvBuffer( int socket )
-{
-  uint16_t recvCnt = 0;
-  ssize_t nread = -1;
-  char buf[SCANNER_RECV_BUF_SZ] = { 0 };
-
-  fprintf( stderr, "Flushing recv buffer\n" );
-  while(( nread = recv( socket, buf, sizeof( buf ), 0 )) < 0 ) {
-    recvCnt++;
-    usleep( SLEEP_10MS );
-    if( recvCnt >= SCANNER_MAX_RECV_CNT ) break;
-  }
-
-  return( 0 );
-}
-

@@ -1,6 +1,7 @@
 #ifndef DWSTATION_H
 #define DWSTATION_H
 
+#include <stdint.h>
 #include <mariadb/mysql.h>
 
 #ifndef TRUE
@@ -11,7 +12,7 @@
 #define FALSE                     0
 #endif // FALSE
 
-#define DEBUG                     0
+#define DEBUG                     1
 
 #define THREAD_CONN_SCANNER       0
 #define THREAD_CONN_WEIGHER       1
@@ -68,15 +69,15 @@
 #define PIN_DAT                   15 // GPIO14 => pin 8
 
 #define SENSOR_EVENT_DELAY        ( 100 * 1000 ) // 100ms
-#define SENSOR_TIME_MIN_BT_UNITS  2 // s
+#define SENSOR_TIME_MIN_BT_UNITS  1600 // ms
 
 #define SCANNER_SEND_MSG_SZ       16
 #define SCANNER_RECV_BUF_SZ       32
 #define SCANNER_START_TRIG_MSG    "start\0"
 #define SCANNER_STOP_TRIG_MSG     "stop\0"
 #define SCANNER_PORT_DEFAULT      2001
-#define SCANNER_MAX_RECV_CNT      100 // recv up to ... times
-#define BARCODE_DEFAULT           "99999999999999\0" // 14 digits
+#define SCANNER_MAX_RECV_CNT      100 // receive up to ... times
+#define BARCODE_DEFAULT           "TimeOut\0"
 #define BARCODE_NOCONN            "NoConn\0"
 
 #define CHECK_DB_DELAY            ( 500 * 1000 ) // 500ms
@@ -127,12 +128,17 @@ extern struct stStationConfig stationConfig;
 extern struct stWeightRecord  weightRecord;
 extern struct stCurrTUParam   currTUParam;
 
-extern MYSQL *SQLCfgConn;
+extern MYSQL *SQLConnConfig;
+extern MYSQL *SQLConnNewTU;
+extern MYSQL *SQLConnCheckSend;
+
+/*
 extern MYSQL_RES *SQLSelectResult;
-extern int isSQLInited;
-extern int isSQLConnected;
-extern int isSelectCfgOK;
-extern int isCfgOK;
+extern int SQLInited;
+extern int SQLConnected;
+extern int stationConfigSelectOK;
+extern int stationConfigOK;
+*/
 
 void handlersSetup( void );
 void pinSetup( void );
@@ -146,7 +152,7 @@ void *weigherLoop( void *arg );
 void *checkDBLoop( void *arg );
 
 void setNonblock( int socket );
-unsigned int getWeightTest();
+uint16_t getWeightTest();
 
 // aux
 extern FILE *logFile;
@@ -154,8 +160,9 @@ extern volatile int logFileUpdated;
 
 void printCurrTime( void );
 int openLog( void );
-int check12( void );
+int checkTimeLogReopen( void );
 void printLog( const char *format, ... );
 void flushLogFileBuffer( void );
+unsigned int getTimeDeltaMS( unsigned int t0, unsigned int t1 );
 
 #endif /* DWSTATION_H */
