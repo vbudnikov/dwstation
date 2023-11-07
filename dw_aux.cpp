@@ -3,7 +3,7 @@
 #include <stdlib.h>
 #include <time.h>
 #include <sys/time.h>
-#include <unistd.h>
+#include <fcntl.h>
 #include <string.h>
 #include <errno.h>
 #include <signal.h>
@@ -23,7 +23,7 @@ static char errLogsPath[] = "/mnt/ssd/dwstation/errlogs/";
 */
 static void ctrlCHandler( int signum )
 {
-  fprintf( stderr, "\nCtrl-C detected\n%s terminated\n", appName );
+  printLog( "\nCtrl-C detected\n" );
 
   if( scannerSocketFd >= 0 ) {
     printLog( "Connection to scanner closed\n" );
@@ -50,9 +50,9 @@ static void ctrlCHandler( int signum )
     mysql_close( SQLConnCheckSend );
   }
 
-  printLog( "\nCtrl-C detected\n%s terminated\n", appName );
-
   curl_global_cleanup();
+
+  printLog( "%s terminated\n", appName );
   fflush( logFile );
 
   (void)( signum );
@@ -97,7 +97,7 @@ int openLog( void )
   char logFileName[LOG_FILE_NAME_SZ] = { 0 };
   char sysCmd[SYS_CMD_SZ] = { 0 };
   uint16_t i = 0;
-  uint16_t nAttempts = 10;
+  const uint16_t nAttempts = 10;
 
   sprintf( errLogFileName, "%sdwstation-error-%04d-%02d-%02d-%02d.%02d.%02d.log"
          , errLogsPath, tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec );
@@ -134,6 +134,7 @@ void printLog( const char *format, ... )
   char logBuf[LOG_BUF_SZ] = { 0 };
   static FILE *errLogFile = NULL;
   char *logBufLoweredPtr = NULL;
+  const uint8_t nCnt = 8;
 
   logFileUpdated = 1; // set flag
 
@@ -146,16 +147,16 @@ void printLog( const char *format, ... )
   va_start( ptr, format );
 
   if( semaphore ) {
-    for ( uint8_t i = 1; i < 8; i++ ) {
+    for ( uint8_t i = 1; i < nCnt; i++ ) {
       usleep( i * 1000 );
 
-      if( semaphore == 0 ) {
-        semaphore = 1;
+      if( semaphore == FALSE ) {
+        semaphore = TRUE;
         break;
       }
     }
   } else {
-    semaphore = 1;
+    semaphore = TRUE;
   }
 
   fprintf( logFile, "%s", timestr );
@@ -230,6 +231,22 @@ int checkTimeLogReopen( void )
 
 /**
 */
+void setNonblock( int socket )
+{
+  int flags = -1;
+
+  flags = fcntl( socket, F_GETFL, 0 );
+
+  if( flags == -1 ) {
+    printLog( "Error: (O_NONBLOCK) fcntl returns -1, exit\n" );
+    exit( 1 );
+  }
+
+  fcntl( socket, F_SETFL, flags | O_NONBLOCK );
+}
+
+/**
+*/
 void flushLogFileBuffer( void )
 {
   static time_t timePrev = 0;
@@ -286,3 +303,26 @@ unsigned int getTimeDeltaMS( unsigned int t0, unsigned int t1 )
 
   return retVal;
 }
+
+/**
+*/
+void dwExit( int status )
+{
+  if( SQLConnConfig ) {
+    printLog( "Connection to MySQL (station configuration) closed\n" );
+    mysql_close( SQLConnConfig );
+  }
+
+  if( SQLConnNewTU ) {
+    printLog( "Connection to MySQL (new TU) closed\n" );
+    mysql_close( SQLConnNewTU );
+  }
+
+  if( SQLConnCheckSend ) {
+    printLog( "Connection to MySQL (check send) closed\n" );
+    mysql_close( SQLConnCheckSend );
+  }
+
+  exit( status );
+}
+

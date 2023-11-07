@@ -29,6 +29,12 @@ int main( int argc, char **argv )
 
   int errThread = 0;
 
+  int connScannerLoopParam = 0;
+  int connWeigherLoopParam = 6541;
+  int scannerLoopParam = 0;
+  int weigherLoopParam = 0;
+  int checkDBLoopParam = 0;
+
   printCurrTime();
   fprintf( stderr, "Start %s, %s\n", appName, nowToday );
 
@@ -97,7 +103,7 @@ int main( int argc, char **argv )
             if( row[CFG_SCANNER_IP_ADDR] )   strcpy( stationConfig.scannerIPAddr, row[CFG_SCANNER_IP_ADDR] );
             if( row[CFG_SCANNER_PORT] )      strcpy( stationConfig.scannerPort,   row[CFG_SCANNER_PORT] );
             if( row[CFG_WEIGHER_IP_ADDR] )   strcpy( stationConfig.weigherIPAddr, row[CFG_WEIGHER_IP_ADDR] );
-            if( row[CFG_WEIGHR_PORT] )       strcpy( stationConfig.weigherPort,   row[CFG_WEIGHR_PORT] );
+            if( row[CFG_WEIGHER_PORT] )      strcpy( stationConfig.weigherPort,   row[CFG_WEIGHER_PORT] );
           } else {
             printLog( "SQL fetch row error, exit\n" );
             exit( 1 );
@@ -126,55 +132,45 @@ int main( int argc, char **argv )
   }
 
   // Threads
-  errThread = pthread_create( &(tid[THREAD_CONN_SCANNER]), NULL, &connScannerLoop, NULL );
+  errThread = pthread_create( &(tid[THREAD_CONN_SCANNER]), NULL, &connScannerLoop, (void *) &connScannerLoopParam );
   if( errThread ) printLog( "\nCan't create thread connScannerLoop: [%s]\n", strerror( errThread ));
   else printLog( "Thread connScannerLoop created successfully\n" );
   usleep( SLEEP_5MS );
 
-  errThread = pthread_create( &(tid[THREAD_CONN_WEIGHER]), NULL, &connWeigherLoop, NULL );
+  errThread = pthread_create( &(tid[THREAD_CONN_WEIGHER]), NULL, &connWeigherLoop, (void *) &connWeigherLoopParam );
   if( errThread ) printLog( "\nCan't create thread connWeigherLoop: [%s]\n", strerror( errThread ));
   else printLog( "Thread connWeigherLoop created successfully\n" );
   usleep( SLEEP_5MS );
 
-  errThread = pthread_create( &(tid[THREAD_SCANNER]), NULL, &scannerLoop, NULL );
+  errThread = pthread_create( &(tid[THREAD_SCANNER]), NULL, &scannerLoop, (void *) &scannerLoopParam );
   if( errThread ) printLog( "Can't create thread scannerLoop: [%s]\n", strerror( errThread ));
   else printLog( "Thread scannerLoop created successfully\n" );
   usleep( SLEEP_5MS );
 
-  errThread = pthread_create( &(tid[THREAD_WEIGHER]), NULL, &weigherLoop, NULL );
+  errThread = pthread_create( &(tid[THREAD_WEIGHER]), NULL, &weigherLoop, (void *) &weigherLoopParam );
   if( errThread ) printLog( "Can't create thread weigherLoop: [%s]\n", strerror( errThread ));
   else printLog( "Thread weigherLoop created successfully\n" );
   usleep( SLEEP_5MS );
 
-  errThread = pthread_create( &(tid[THREAD_CHECK_DB]), NULL, &checkDBLoop, NULL );
+  errThread = pthread_create( &(tid[THREAD_CHECK_DB]), NULL, &checkDBLoop, (void *) &checkDBLoopParam );
   if( errThread ) printLog( "\nCan't create thread checkDBLoop: [%s]\n", strerror( errThread ));
   else printLog( "Thread checkDBLoop created successfully\n" );
   usleep( SLEEP_5MS );
 
+  //  main loop
   while( TRUE ) {
     flushLogFileBuffer();
     checkTimeLogReopen();
 
+    if( connScannerLoopParam == AWS_FAIL ) {
+
+      break;
+    }
+
     usleep( SLEEP_10MS );
   }
 
-  if( SQLConnConfig ) {
-    printLog( "Connection to MySQL (config) closed\n" );
-    mysql_close( SQLConnConfig );
-    SQLConnConfig = NULL;
-  }
-
-  if( SQLConnNewTU ) {
-    printLog( "Connection to MySQL (new TU) closed\n" );
-    mysql_close( SQLConnNewTU );
-    SQLConnNewTU = NULL;
-  }
-
-  if( SQLConnCheckSend ) {
-    printLog( "Connection to MySQL (check DB, send to server) closed\n" );
-    mysql_close( SQLConnCheckSend );
-    SQLConnCheckSend = NULL;
-  }
+  dwExit( 1 );
 
   return 0;
 }

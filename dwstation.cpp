@@ -4,12 +4,9 @@
 #include <ctype.h>
 #include <time.h>
 #include <sys/time.h>
-#include <unistd.h>
-#include <fcntl.h>
 #include <sys/socket.h>
 #include <arpa/inet.h>
 #include <errno.h>
-#include <wiringPi.h>
 #include <curl/curl.h>
 #include <netinet/tcp.h>
 
@@ -49,12 +46,16 @@ void pinSetup( void )
 
   printLog( "Using GPIO pin: PIN%d\n", PIN_DAT );
 
-  // setting time values
+  // volatile: setting time values
   sensorEventRAWTime = time( NULL );
   sensorEventRAWTimePrev = sensorEventRAWTime;
 
   sensorEventRAWTimeMS = millis();
   sensorEventRAWTimeMSPrev = sensorEventRAWTimeMS;
+
+  // volatile: need to initialize
+  sensorScannerEventFlag = FALSE;
+  sensorWeigherEventFlag = FALSE;
 }
 
 /**
@@ -77,8 +78,6 @@ void sensorEvent( void )
   deltaMS = getTimeDeltaMS( sensorEventRAWTimeMSPrev, sensorEventRAWTimeMS );
   sensorEventRAWTimeMSPrev = sensorEventRAWTimeMS;
 
-  // fprintf( stderr, "Sensor event, time deltaMS = %ldms\n", deltaMS ); // DEBUG
-
   if( deltaMS >= SENSOR_TIME_MIN_BT_UNITS ) {
     sensorScannerEventFlag = TRUE;
     sensorWeigherEventFlag = TRUE;
@@ -90,16 +89,18 @@ void sensorEvent( void )
   }
 }
 
-
 // Threads implementations
 /**
   void *connScannerLoop( void *arg )
 */
 void *connScannerLoop( void *arg )
 {
+  int *retVal = (int*) arg;
   int scannerClientFd = -1;
   struct sockaddr_in serv_addr;
   uint16_t scannerPort = SCANNER_PORT_DEFAULT;
+
+  printLog( "Starting connScannerLoop\n" );
 
   scannerPort = uint16_t( atoi( stationConfig.scannerPort ));
   serv_addr.sin_family = AF_INET;
@@ -110,6 +111,8 @@ void *connScannerLoop( void *arg )
     exit( 1 );
   }
 
+  scannerConnected = FALSE; // volatile: need to initialize
+
   //  thread main loop
   while( TRUE ) {
     while( !scannerConnected ) {
@@ -118,22 +121,22 @@ void *connScannerLoop( void *arg )
         exit( 1 );
       }
 
-      printLog( "Trying to connect to the the scanner [%s:%s]\n", stationConfig.scannerIPAddr, stationConfig.scannerPort );
-      // fprintf( stderr, "Trying to connect to the the scanner [%s:%s]\n", stationConfig.scannerIPAddr, stationConfig.scannerPort );
+      printLog( "Trying to connect to the the scanner [%s:%s]\n"
+              , stationConfig.scannerIPAddr, stationConfig.scannerPort );
 
       scannerClientFd = connect( scannerSocketFd, (struct sockaddr*) &serv_addr, sizeof( serv_addr ));
 
       if( scannerClientFd < 0 ) {
         scannerConnected = FALSE;
-        printLog( "Connection to scanner failed: %s\n", strerror( errno ));
-        // fprintf( stderr, "Connection to scanner failed: %s\n", strerror( errno ));
+        printLog( "Connection to scanner [%s:%s] failed: %s\n"
+                , stationConfig.scannerIPAddr, stationConfig.scannerPort, strerror( errno ));
         shutdown( scannerSocketFd, SHUT_RDWR ); // test: shutdown
         close( scannerSocketFd );
         usleep( SLEEP_2S );
       } else {
         scannerConnected = TRUE;
-        printLog( "Connection to scanner OK\n" );
-        // fprintf( stderr, "Connection to scanner OK\n" );
+        printLog( "Connection to scanner [%s:%s] OK\n"
+                , stationConfig.scannerIPAddr, stationConfig.scannerPort );
         setNonblock( scannerSocketFd );
         int flag = 1; // allways 1
         if( setsockopt( scannerSocketFd, IPPROTO_TCP, TCP_NODELAY, (char *) &flag, sizeof(int)) < 0 ) {
@@ -146,6 +149,10 @@ void *connScannerLoop( void *arg )
 
     usleep( SLEEP_100MS );
   }
+
+  printLog( "Thread connScannerLoop finished, exit\n"  );
+  *retVal = AWS_FAIL;
+  return( NULL );
 }
 
 /**
@@ -153,10 +160,20 @@ void *connScannerLoop( void *arg )
 */
 void *connWeigherLoop( void *arg )
 {
+  int *retVal = (int*) arg;
+
+  printLog( "Starting connWeigherLoop\n" );
+
+  weigherConnected = FALSE; // volatile: need to initialize
+
   while( TRUE ) {
 
     usleep( SLEEP_5MS );
-  }
+  } // while( TRUE )
+
+  printLog( "Thread connWeigherLoop finished, exit\n"  );
+  *retVal = AWS_FAIL;
+  return( NULL );
 }
 
 /**
@@ -164,10 +181,12 @@ void *connWeigherLoop( void *arg )
 */
 void *scannerLoop( void *arg )
 {
-
+  int *retVal = (int*) arg;
   size_t nsend = 0;
   ssize_t nread = 0;
   uint16_t recvCnt = 0;
+
+  printLog( "Starting scannerLoop\n" );
 
   char msg[SCANNER_SEND_MSG_SZ] = { 0 };
   char buf[SCANNER_RECV_BUF_SZ] = { 0 };
@@ -192,32 +211,31 @@ void *scannerLoop( void *arg )
         nsend = send( scannerSocketFd, msg, strlen( msg ), 0 );
 
         printLog( "> Send: %d bytes [%s]\n", nsend, msg );
-        // fprintf( stderr, "> Send: %d bytes [%s]\n", nsend, msg );
 
         if( nsend < 0 ) {
           printLog( "Send error: %s\n", strerror( errno ) );
           close( scannerSocketFd ); // closing the connected socket
-          break; // trying to reconnect
+          scannerConnected = FALSE; // trying to reconnect
+          // break; // trying to reconnect // ? for what?
         } else {
           printLog( "> Read\n" );
-          // fprintf( stderr, "> Read\n" );
           recvCnt = 0;
 
-          // while(( nread = read( scannerSocketFd, buf, sizeof( buf ))) < 0 ) {
           while(( nread = recv( scannerSocketFd, buf, sizeof( buf ), 0 )) < 0 ) {
             recvCnt++;
-            usleep( SLEEP_10MS );
             if( recvCnt >= SCANNER_MAX_RECV_CNT ) break;
+            usleep( SLEEP_10MS );
           }
-          // fprintf( stderr, "recvCnt = %d\n", recvCnt );
+
+          printLog( "recvCnt = %u\n", recvCnt );
 
           if( nread < 0 ) {
             printLog( "Read error: %s\n", strerror( errno ));
-            // fprintf( stderr, "Read error: %s\n", strerror( errno ));
+            close( scannerSocketFd ); // closing the connected socket
             scannerConnected = FALSE;
             strcpy( buf, BARCODE_DEFAULT );
           } else {
-            // replace last terminatinп character with \0
+            // replace last terminating character with \0
             if( nread > 0 ) {
               if( isdigit( buf[nread - 1] ) ) {
                 buf[nread] = '\0';
@@ -225,7 +243,6 @@ void *scannerLoop( void *arg )
                 buf[nread - 1] = '\0';
               }
               printLog( "nread = %d: [%s]\n", nread, buf );
-              // fprintf( stderr, "nread = %d: [%s]\n", nread, buf );
             } else {
               strcpy( buf, BARCODE_DEFAULT );
             }
@@ -236,7 +253,7 @@ void *scannerLoop( void *arg )
       }
 
       // print msg and hex
-      fprintf( stderr, "[%s]: ", buf );
+      fprintf( stderr, "Final barcode: [%s]: ", buf );
       for( size_t i = 0; buf[i]; i++ ) {
         fprintf( stderr, "%02X ", buf[i] );
       }
@@ -250,7 +267,9 @@ void *scannerLoop( void *arg )
     usleep( SLEEP_1MS );
   } // while( TRUE )
 
-  return NULL;
+  printLog( "Thread scannerLoop finished, exit\n"  );
+  *retVal = AWS_FAIL;
+  return( NULL );
 }
 
 /**
@@ -258,23 +277,26 @@ void *scannerLoop( void *arg )
 */
 void *weigherLoop( void *arg )
 {
+  int *retVal = (int*) arg;
   int SQLInited = 0;
   int SQLConnected = 0;
   int insertOK = 0;
   unsigned int weight = 0;
 
+  printLog( "Starting weigherLoop\n" );
+
    // connecting to MySQL
   if(( SQLConnNewTU = mysql_init( NULL )) == NULL ) {
-    printLog( "SQL (new TU): init error: %s\n", mysql_error( SQLConnNewTU ));
     SQLInited = FALSE;
+    printLog( "SQL (new TU): init error: %s\n", mysql_error( SQLConnNewTU ));
   } else {
     SQLInited = TRUE;
     printLog( "SQL (new TU): init OK\n" );
   }
 
   if( mysql_real_connect( SQLConnNewTU, "127.0.0.1", "dwstation", "dwstation", "dwstation", 0, NULL, 0 ) == NULL ) {
-    printLog( "SQL (new TU): connect error: %s\n", mysql_error( SQLConnNewTU ));
     SQLConnected = FALSE;
+    printLog( "SQL (new TU): connect error: %s\n", mysql_error( SQLConnNewTU ));
   } else {
     SQLConnected = TRUE;
     printLog( "SQL (new TU): connect OK\n" );
@@ -290,10 +312,8 @@ void *weigherLoop( void *arg )
     if( sensorWeigherEventFlag ) {
       sensorWeigherEventFlag = 0;
 
-      usleep( SLEEP_2S );
       weight = getWeightTest();
-      // filling barcode
-      sprintf( currTUParam.weight, "%u", weight );
+      sprintf( currTUParam.weight, "%u", weight ); // filling barcode
 
       printLog( "Current weight = [%s]\n", currTUParam.weight );
 
@@ -317,14 +337,16 @@ void *weigherLoop( void *arg )
     } // sensorWeigherEventFlag
 
     usleep( SLEEP_1MS );
-  }
+  } // while( TRUE )
 
   if( SQLConnNewTU ) {
     mysql_close( SQLConnNewTU );
     SQLConnNewTU = NULL;
   }
 
-  return NULL;
+  printLog( "Thread weigherLoop finished, exit\n"  );
+  *retVal = AWS_FAIL;
+  return( NULL );
 }
 
 /**
@@ -332,6 +354,8 @@ void *weigherLoop( void *arg )
 */
 void *checkDBLoop( void *arg )
 {
+  int *retVal = (int*) arg;
+
   // MySQL
   MYSQL_RES *SQLSelectResult = NULL;
   MYSQL_ROW row = NULL;  // for current row parsing
@@ -341,6 +365,8 @@ void *checkDBLoop( void *arg )
   int updateOK = 0;
   int recordFound = 0;
   unsigned int weightRecordNumFields = 0;
+
+  printLog( "Starting checkDBLoop\n" );
 
   // cURL + JSON
   char json[JSON_BUF_LEN] = { 0 };
@@ -406,6 +432,7 @@ void *checkDBLoop( void *arg )
 
       if( row ) {
         recordFound = TRUE;
+        printLog( "SQL (check send): new record found\n" );
 
         if( row[UID_INDEX] )       strcpy( weightRecord.uid,       row[UID_INDEX] );
         if( row[BARCODE_INDEX] )   strcpy( weightRecord.barcode,   row[BARCODE_INDEX] );
@@ -426,8 +453,6 @@ void *checkDBLoop( void *arg )
 
     // Curl part
     if( recordFound ) {
-      printLog( "SQL (check send): new record found\n" );
-
       jsonLen = 0;
       memset( userID, 0, sizeof( userID ));
 
@@ -471,10 +496,9 @@ void *checkDBLoop( void *arg )
         if( httpServerResponseCode == HTTP_RESPONSE_CODE_OK ) {
           char dquery[DYN_QUERY_SZ] = { 0 };
           sprintf( dquery, "UPDATE T_dw00resp SET status='1' WHERE uid='%s'", weightRecord.uid );
-          printLog( "SQL (check send): query to update: [%s]\n", dquery );
+          printLog( "SQL (check send): [%s]\n", dquery );
 
           if( mysql_query( SQLConnCheckSend, dquery )) {
-            printLog( "SQL (check send): update error: %s\n", mysql_sqlstate( SQLConnCheckSend ));
             updateOK = FALSE;
           } else {
             updateOK = TRUE;
@@ -482,11 +506,14 @@ void *checkDBLoop( void *arg )
 
           if( updateOK ) {
             printLog( "SQL (check send): update OK\n" );
+          } else {
+            printLog( "SQL (check send): update error: %s\n", mysql_sqlstate( SQLConnCheckSend ));
           }
         }
       } else {
-        printLog( "perform: %s\n", strerror( errno ));
-        printLog( "res = %d\n", curlPerformResult );
+        printLog( "CURL perform error: %s, sleep for %us\n", strerror( errno ), SLEEP_2S / ONE_SECOND );
+        usleep( SLEEP_2S ); // sleep 2s
+        // printLog( "res = %d\n", curlPerformResult );  // debug
       }
 
       curl_slist_free_all( slist ); // ### may catch segfault
@@ -494,7 +521,7 @@ void *checkDBLoop( void *arg )
     }
 
     usleep( CHECK_DB_DELAY ); // sleep 500ms
-  } // while( TRUE ) // ###
+  } // while( TRUE )
 
   if( SQLConnCheckSend ) {
     mysql_close( SQLConnCheckSend );
@@ -503,24 +530,12 @@ void *checkDBLoop( void *arg )
 
   curl_global_cleanup();
 
-  return NULL;
+  printLog( "Thread checkDBLoop finished, exit\n"  );
+  *retVal = AWS_FAIL;
+  return( NULL );
 }
 
-/**
-*/
-void setNonblock( int socket )
-{
-  int flags = -1;
 
-  flags = fcntl( socket, F_GETFL, 0 );
-
-  if( flags == -1 ) {
-    printLog( "Error: (O_NONBLOCK) fcntl returns -1, exit\n" );
-    exit( 1 );
-  }
-
-  fcntl( socket, F_SETFL, flags | O_NONBLOCK );
-}
 
 /**
 */
@@ -529,6 +544,7 @@ uint16_t getWeightTest()
   uint16_t retVal = 0;
 
   retVal = ( 1000 * ( 1 + (uint16_t)( rand() % 10 ))) + (uint16_t)( rand() % 1000 );
+  usleep( SLEEP_2S ); // delay simulation
 
   return( retVal );
 }

@@ -2,7 +2,9 @@
 #define DWSTATION_H
 
 #include <stdint.h>
+#include <unistd.h>
 #include <mariadb/mysql.h>
+#include <wiringPi.h>
 
 #ifndef TRUE
 #define TRUE                      1
@@ -13,6 +15,8 @@
 #endif // FALSE
 
 #define DEBUG                     1
+#define AWS_SUCCESS               0
+#define AWS_FAIL                  1
 
 #define THREAD_CONN_SCANNER       0
 #define THREAD_CONN_WEIGHER       1
@@ -49,7 +53,7 @@
 #define CFG_SCANNER_IP_ADDR       4
 #define CFG_SCANNER_PORT          5
 #define CFG_WEIGHER_IP_ADDR       6
-#define CFG_WEIGHR_PORT           7
+#define CFG_WEIGHER_PORT          7
 #define CFG_LAST_INDEX            8 // Check this when adding new fields
 
 #define UID_INDEX                 0
@@ -76,22 +80,24 @@
 #define SCANNER_START_TRIG_MSG    "start\0"
 #define SCANNER_STOP_TRIG_MSG     "stop\0"
 #define SCANNER_PORT_DEFAULT      2001
-#define SCANNER_MAX_RECV_CNT      100 // receive up to ... times
+#define SCANNER_MAX_RECV_CNT      300 // receive up to ... times
 #define BARCODE_DEFAULT           "TimeOut\0"
 #define BARCODE_NOCONN            "NoConn\0"
 
 #define CHECK_DB_DELAY            ( 500 * 1000 ) // 500ms
 
-#define SLEEP_1MS                ( 1 * 1000 ) // 1 ms
-#define SLEEP_5MS                ( 5 * 1000 ) // 5 ms
-#define SLEEP_10MS               ( 10 * 1000 ) // 10 ms
-#define SLEEP_100MS              ( 100 * 1000 ) // 100 ms
-#define SLEEP_2S                 ( 2 * 1000 * 1000 ) // 2 s
+#define ONE_SECOND                ( 1000 * 1000 )
+#define SLEEP_1MS                 ( 1 * 1000 ) // 1 ms
+#define SLEEP_5MS                 ( 5 * 1000 ) // 5 ms
+#define SLEEP_10MS                ( 10 * 1000 ) // 10 ms
+#define SLEEP_100MS               ( 100 * 1000 ) // 100 ms
+#define SLEEP_1S                  ( 1 ) * ONE_SECOND // 1 s
+#define SLEEP_2S                  ( 2 ) * ONE_SECOND // 2 s
 
-#define LOG_FILE_FLUSH_INTERVAL  60 // seconds
-#define LOG_FILE_NAME_SZ         256
-#define LOG_BUF_SZ               512
-#define SYS_CMD_SZ               128
+#define LOG_FILE_FLUSH_INTERVAL   60 // seconds
+#define LOG_FILE_NAME_SZ          256
+#define LOG_BUF_SZ                512
+#define SYS_CMD_SZ                128
 
 
 extern const char *nowToday;
@@ -132,14 +138,6 @@ extern MYSQL *SQLConnConfig;
 extern MYSQL *SQLConnNewTU;
 extern MYSQL *SQLConnCheckSend;
 
-/*
-extern MYSQL_RES *SQLSelectResult;
-extern int SQLInited;
-extern int SQLConnected;
-extern int stationConfigSelectOK;
-extern int stationConfigOK;
-*/
-
 void handlersSetup( void );
 void pinSetup( void );
 void sensorEvent( void );
@@ -164,5 +162,6 @@ int checkTimeLogReopen( void );
 void printLog( const char *format, ... );
 void flushLogFileBuffer( void );
 unsigned int getTimeDeltaMS( unsigned int t0, unsigned int t1 );
+void dwExit( int status );
 
 #endif /* DWSTATION_H */
