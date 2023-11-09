@@ -3,8 +3,12 @@
 
 #include <stdint.h>
 #include <unistd.h>
+#include <pthread.h>
 #include <mariadb/mysql.h>
 #include <wiringPi.h>
+#include <sys/ipc.h>
+#include <sys/msg.h>
+#include <sys/shm.h>
 
 #ifndef TRUE
 #define TRUE                      1
@@ -14,7 +18,7 @@
 #define FALSE                     0
 #endif // FALSE
 
-#define DEBUG                     1
+#define DEBUG                     FALSE
 #define AWS_SUCCESS               0
 #define AWS_FAIL                  1
 
@@ -23,7 +27,8 @@
 #define THREAD_SCANNER            2
 #define THREAD_WEIGHER            3
 #define THREAD_CHECK_DB           4
-#define THREADS_NUM               5 // Check this when adding new fields
+#define THREAD_MSG_QUEUE          5
+#define THREADS_NUM               6 // Check this when adding new fields
 
 #define TIME_STR_SZ               32
 #define PREFIX_SZ                 16
@@ -81,8 +86,10 @@
 #define SCANNER_STOP_TRIG_MSG     "stop\0"
 #define SCANNER_PORT_DEFAULT      2001
 #define SCANNER_MAX_RECV_CNT      300 // receive up to ... times
+
 #define BARCODE_DEFAULT           "TimeOut\0"
 #define BARCODE_NOCONN            "NoConn\0"
+#define BARCODE_SEND_ERROR        "SndErr\0"
 
 #define CHECK_DB_DELAY            ( 500 * 1000 ) // 500ms
 
@@ -91,20 +98,32 @@
 #define SLEEP_5MS                 ( 5 * 1000 ) // 5 ms
 #define SLEEP_10MS                ( 10 * 1000 ) // 10 ms
 #define SLEEP_100MS               ( 100 * 1000 ) // 100 ms
+#define SLEEP_500MS               ( 500 * 1000 ) // 500 ms
 #define SLEEP_1S                  ( 1 ) * ONE_SECOND // 1 s
 #define SLEEP_2S                  ( 2 ) * ONE_SECOND // 2 s
+#define SLEEP_2500MS              ( 2.5 ) * ONE_SECOND // 2500 ms
 
 #define LOG_FILE_FLUSH_INTERVAL   60 // seconds
 #define LOG_FILE_NAME_SZ          256
 #define LOG_BUF_SZ                512
 #define SYS_CMD_SZ                128
 
+#define MSG_SZ                    128
+#define MQ_KEY                    10
+#define IPC_MASK                  0600
+#define CMD_SEPARATOR             '='
+#define CMD_SZ                    32
+#define CMD_PARAM_SZ              16
+#define CMD_RESTART_CMD           "restart"
+#define CMD_RESTART_PARAM         "TRUE"
 
+extern volatile int running;
 extern const char *nowToday;
 extern const char *appName;
 
 extern int scannerSocketFd;
 extern int weigherSocketFd;
+extern pthread_t tid[THREADS_NUM];
 
 struct stStationConfig {
   char serverAddr[SERVER_ADDR_SZ]        = { 0 };
@@ -148,6 +167,7 @@ void *connWeigherLoop( void *arg );
 void *scannerLoop( void *arg );
 void *weigherLoop( void *arg );
 void *checkDBLoop( void *arg );
+void *msgQueueLoop( void *arg );
 
 void setNonblock( int socket );
 uint16_t getWeightTest();
@@ -162,6 +182,10 @@ int checkTimeLogReopen( void );
 void printLog( const char *format, ... );
 void flushLogFileBuffer( void );
 unsigned int getTimeDeltaMS( unsigned int t0, unsigned int t1 );
-void dwExit( int status );
+// void dwExit( int status );
+int cmdHandler( char *data );
+void calcelAllThreads( void );
+void closeAllSockets( void );
+void closeAllSQLConnections( void );
 
 #endif /* DWSTATION_H */

@@ -25,30 +25,9 @@ static void ctrlCHandler( int signum )
 {
   printLog( "\nCtrl-C detected\n" );
 
-  if( scannerSocketFd >= 0 ) {
-    printLog( "Connection to scanner closed\n" );
-    close( scannerSocketFd );
-  }
-
-  if( weigherSocketFd >= 0 ) {
-    printLog( "Connection to weigher closed\n" );
-    close( scannerSocketFd );
-  }
-
-  if( SQLConnConfig ) {
-    printLog( "Connection to MySQL (station configuration) closed\n" );
-    mysql_close( SQLConnConfig );
-  }
-
-  if( SQLConnNewTU ) {
-    printLog( "Connection to MySQL (new TU) closed\n" );
-    mysql_close( SQLConnNewTU );
-  }
-
-  if( SQLConnCheckSend ) {
-    printLog( "Connection to MySQL (check send) closed\n" );
-    mysql_close( SQLConnCheckSend );
-  }
+  calcelAllThreads();
+  closeAllSockets();
+  closeAllSQLConnections();
 
   curl_global_cleanup();
 
@@ -69,6 +48,147 @@ void handlersSetup( void )
   sigaction( SIGINT,  &act, NULL );
   sigaction( SIGTERM, &act, NULL );
   sigaction( SIGKILL, &act, NULL );
+}
+
+/**
+*/
+void calcelAllThreads( void )
+{
+  int s = 0;
+  void *res;
+
+  printLog( "Sending threads cancellation request\n" );
+
+  // connScannerLoop
+  s = pthread_cancel( tid[THREAD_CONN_SCANNER] );
+
+  if( s == 0 ) {
+    printLog( "connScannerLoop: pthread_cancel OK\n" );
+  } else {
+    printLog( "connScannerLoop: pthread_cancel error = [%d]\n", s );
+  }
+
+  s = pthread_join( tid[THREAD_CONN_SCANNER], &res );
+  if( res == PTHREAD_CANCELED ) {
+    printLog( "connScannerLoop: thread was canceled\n" );
+  } else {
+    printLog( "connScannerLoop: thread was not cancelled\n", s );
+  }
+
+  // connWeigherLoop
+  s = pthread_cancel( tid[THREAD_CONN_WEIGHER] );
+  if( s == 0 ) {
+    printLog( "connWeigherLoop: pthread_cancel OK\n" );
+  } else {
+    printLog( "connWeigherLoop: pthread_cancel error = [%d]\n", s );
+  }
+
+  s = pthread_join( tid[THREAD_CONN_WEIGHER], &res );
+  if( res == PTHREAD_CANCELED ) {
+    printLog( "connWeigherLoop: thread was canceled\n" );
+  } else {
+    printLog( "connWeigherLoop: thread was not cancelled\n", s );
+  }
+
+  // scannerLoop
+  s = pthread_cancel( tid[THREAD_SCANNER] );
+  if( s == 0 ) {
+    printLog( "scannerLoop: pthread_cancel OK\n" );
+  } else {
+    printLog( "scannerLoop: pthread_cancel error = [%d]\n", s );
+  }
+
+  s = pthread_join( tid[THREAD_SCANNER], &res );
+  if( res == PTHREAD_CANCELED ) {
+    printLog( "scannerLoop: thread was canceled\n" );
+  } else {
+    printLog( "scannerLoop: thread was not cancelled\n", s );
+  }
+
+  // weigherLoop
+  s = pthread_cancel( tid[THREAD_WEIGHER] );
+  if( s == 0 ) {
+    printLog( "weigherLoop: pthread_cancel OK\n" );
+  } else {
+    printLog( "weigherLoop: pthread_cancel error = [%d]\n", s );
+  }
+
+  s = pthread_join( tid[THREAD_WEIGHER], &res );
+  if( res == PTHREAD_CANCELED ) {
+    printLog( "weigherLoop: thread was canceled\n" );
+  } else {
+    printLog( "weigherLoop: thread was not cancelled\n", s );
+  }
+
+  // checkDBLoop
+  s = pthread_cancel( tid[THREAD_CHECK_DB] );
+  if( s == 0 ) {
+    printLog( "checkDBLoop: pthread_cancel OK\n" );
+  } else {
+    printLog( "checkDBLoop: pthread_cancel error = [%d]\n", s );
+  }
+
+  s = pthread_join( tid[THREAD_CHECK_DB], &res );
+  if( res == PTHREAD_CANCELED ) {
+    printLog( "checkDBLoop: thread was canceled\n" );
+  } else {
+    printLog( "checkDBLoop: thread was not cancelled\n", s );
+  }
+
+  // msgQueueLoop
+  s = pthread_cancel( tid[THREAD_MSG_QUEUE] );
+  if( s == 0 ) {
+    printLog( "msgQueueLoop: pthread_cancel OK\n" );
+  } else {
+    printLog( "msgQueueLoop: pthread_cancel error = [%d]\n", s );
+  }
+
+  s = pthread_join( tid[THREAD_MSG_QUEUE], &res );
+  if( res == PTHREAD_CANCELED ) {
+    printLog( "msgQueueLoop: thread was canceled\n" );
+  } else {
+    printLog( "msgQueueLoop: thread was not cancelled\n", s );
+  }
+}
+
+/**
+*/
+void closeAllSockets( void )
+{
+  printLog( "Close all sockets\n" );
+
+  // close sockets
+  if( scannerSocketFd >= 0 ) {
+    printLog( "Connection to scanner closed\n" );
+    close( scannerSocketFd );
+  }
+
+  if( weigherSocketFd >= 0 ) {
+    printLog( "Connection to weigher closed\n" );
+    close( scannerSocketFd );
+  }
+}
+
+/**
+*/
+void closeAllSQLConnections( void )
+{
+  printLog( "Close SQL connections\n" );
+
+  if( SQLConnConfig ) {
+    printLog( "Connection to MySQL (station configuration) closed\n" );
+    mysql_close( SQLConnConfig );
+  }
+
+  if( SQLConnNewTU ) {
+    printLog( "Connection to MySQL (new TU) closed\n" );
+    mysql_close( SQLConnNewTU );
+  }
+
+  if( SQLConnCheckSend ) {
+    printLog( "Connection to MySQL (check send) closed\n" );
+    mysql_close( SQLConnCheckSend );
+  }
 }
 
 /**
@@ -306,23 +426,56 @@ unsigned int getTimeDeltaMS( unsigned int t0, unsigned int t1 )
 
 /**
 */
+/*
 void dwExit( int status )
 {
-  if( SQLConnConfig ) {
-    printLog( "Connection to MySQL (station configuration) closed\n" );
-    mysql_close( SQLConnConfig );
-  }
+  printLog( "%s is going to restart\n", appName );
 
-  if( SQLConnNewTU ) {
-    printLog( "Connection to MySQL (new TU) closed\n" );
-    mysql_close( SQLConnNewTU );
-  }
+  calcelAllThreads();
+  closeAllSockets();
+  closeAllSQLConnections();
 
-  if( SQLConnCheckSend ) {
-    printLog( "Connection to MySQL (check send) closed\n" );
-    mysql_close( SQLConnCheckSend );
-  }
+  curl_global_cleanup();
+
+  fflush( logFile );
 
   exit( status );
 }
+*/
 
+/**
+*/
+int cmdHandler( char *data )
+{
+  int retVal = AWS_SUCCESS;
+  char cmd[CMD_SZ] = { 0 };
+  char cmdParam[CMD_PARAM_SZ] = { 0 };
+  char *sepPos = NULL;
+  int cmdLen = 0;
+  char separator = CMD_SEPARATOR; // '='
+
+  sepPos = strchr( data, separator );
+
+  if( NULL != sepPos ) {
+    cmdLen = ( sepPos - data );
+    strncpy( cmd, data, cmdLen );
+    cmd[cmdLen] = '\0'; // CMD_SEPARATOR;
+
+    strcpy( cmdParam, sepPos + 1 );  // + 1 to exclude separator
+    printLog( "%s: Parsing: [%s] => [%s]\n" , __func__, cmd, cmdParam );
+
+    retVal = AWS_SUCCESS;
+  } else {
+    printLog( "%s: Missing separator\n", __func__ );
+
+    retVal = AWS_FAIL;
+  }
+
+  if( 0 == strcmp( cmd, CMD_RESTART_CMD )) {
+    if( 0 == strcmp( cmdParam, CMD_RESTART_PARAM )) {
+      running = FALSE;
+    }
+  }
+
+  return retVal;
+}

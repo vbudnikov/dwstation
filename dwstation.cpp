@@ -34,6 +34,12 @@ struct stStationConfig stationConfig;
 struct stWeightRecord  weightRecord;
 struct stCurrTUParam   currTUParam;
 
+int msqid = 0;
+typedef struct mqbuf {
+  long mtype;
+  char mtext[MSG_SZ];
+} messageBuf;
+
 /**
 */
 void pinSetup( void )
@@ -100,7 +106,7 @@ void *connScannerLoop( void *arg )
   struct sockaddr_in serv_addr;
   uint16_t scannerPort = SCANNER_PORT_DEFAULT;
 
-  printLog( "Starting connScannerLoop\n" );
+  printLog( "Starting %s\n", __func__ );
 
   scannerPort = uint16_t( atoi( stationConfig.scannerPort ));
   serv_addr.sin_family = AF_INET;
@@ -147,8 +153,9 @@ void *connScannerLoop( void *arg )
       }
     }
 
+    if( !running ) break;
     usleep( SLEEP_100MS );
-  }
+  } // while( TRUE )
 
   printLog( "Thread connScannerLoop finished, exit\n"  );
   *retVal = AWS_FAIL;
@@ -162,12 +169,13 @@ void *connWeigherLoop( void *arg )
 {
   int *retVal = (int*) arg;
 
-  printLog( "Starting connWeigherLoop\n" );
+  printLog( "Starting %s\n", __func__ );
 
   weigherConnected = FALSE; // volatile: need to initialize
 
   while( TRUE ) {
 
+    if( !running ) break;
     usleep( SLEEP_5MS );
   } // while( TRUE )
 
@@ -182,11 +190,11 @@ void *connWeigherLoop( void *arg )
 void *scannerLoop( void *arg )
 {
   int *retVal = (int*) arg;
-  size_t nsend = 0;
+  ssize_t nsend = 0;
   ssize_t nread = 0;
   uint16_t recvCnt = 0;
 
-  printLog( "Starting scannerLoop\n" );
+  printLog( "Starting %s\n", __func__ );
 
   char msg[SCANNER_SEND_MSG_SZ] = { 0 };
   char buf[SCANNER_RECV_BUF_SZ] = { 0 };
@@ -216,7 +224,7 @@ void *scannerLoop( void *arg )
           printLog( "Send error: %s\n", strerror( errno ) );
           close( scannerSocketFd ); // closing the connected socket
           scannerConnected = FALSE; // trying to reconnect
-          // break; // trying to reconnect // ? for what?
+          strcpy( buf, BARCODE_SEND_ERROR );
         } else {
           printLog( "> Read\n" );
           recvCnt = 0;
@@ -227,12 +235,12 @@ void *scannerLoop( void *arg )
             usleep( SLEEP_10MS );
           }
 
-          printLog( "recvCnt = %u\n", recvCnt );
+          printLog( "recvCnt = %u, nread = %zd\n", recvCnt, nread );
 
           if( nread < 0 ) {
             printLog( "Read error: %s\n", strerror( errno ));
             close( scannerSocketFd ); // closing the connected socket
-            scannerConnected = FALSE;
+            scannerConnected = FALSE; // trying to reconnect
             strcpy( buf, BARCODE_DEFAULT );
           } else {
             // replace last terminating character with \0
@@ -252,18 +260,22 @@ void *scannerLoop( void *arg )
         strcpy( buf, BARCODE_NOCONN );
       }
 
+      printLog( "Final barcode: [%s]\n", buf );
+
+/*
       // print msg and hex
-      fprintf( stderr, "Final barcode: [%s]: ", buf );
       for( size_t i = 0; buf[i]; i++ ) {
         fprintf( stderr, "%02X ", buf[i] );
       }
       fprintf( stderr, "\n" );
       // end of print
+*/
 
       // filling barcode
       strcpy( currTUParam.barcode, buf );
     }
 
+    if( !running ) break;
     usleep( SLEEP_1MS );
   } // while( TRUE )
 
@@ -283,7 +295,7 @@ void *weigherLoop( void *arg )
   int insertOK = 0;
   unsigned int weight = 0;
 
-  printLog( "Starting weigherLoop\n" );
+  printLog( "Starting %s\n", __func__ );
 
    // connecting to MySQL
   if(( SQLConnNewTU = mysql_init( NULL )) == NULL ) {
@@ -334,8 +346,9 @@ void *weigherLoop( void *arg )
           printLog( "SQL (new TU): insert OK\n" );
         }
       }
-    } // sensorWeigherEventFlag
+    }
 
+    if( !running ) break;
     usleep( SLEEP_1MS );
   } // while( TRUE )
 
@@ -366,7 +379,7 @@ void *checkDBLoop( void *arg )
   int recordFound = 0;
   unsigned int weightRecordNumFields = 0;
 
-  printLog( "Starting checkDBLoop\n" );
+  printLog( "Starting %s\n", __func__ );
 
   // cURL + JSON
   char json[JSON_BUF_LEN] = { 0 };
@@ -513,13 +526,13 @@ void *checkDBLoop( void *arg )
       } else {
         printLog( "CURL perform error: %s, sleep for %us\n", strerror( errno ), SLEEP_2S / ONE_SECOND );
         usleep( SLEEP_2S ); // sleep 2s
-        // printLog( "res = %d\n", curlPerformResult );  // debug
       }
 
       curl_slist_free_all( slist ); // ### may catch segfault
       curl_easy_cleanup( curl ); // always cleanup
     }
 
+    if( !running ) break;
     usleep( CHECK_DB_DELAY ); // sleep 500ms
   } // while( TRUE )
 
@@ -535,6 +548,45 @@ void *checkDBLoop( void *arg )
   return( NULL );
 }
 
+/**
+  Message queue exchange thread
+*/
+void *msgQueueLoop( void *arg )
+{
+  int *retVal = (int*) arg;
+  pthread_t id_ = pthread_self();
+  int msgflg = IPC_CREAT | IPC_MASK;
+  messageBuf rbuf;
+
+  printLog( "Starting %s\n", __func__ );
+
+  //  ###
+  if( pthread_equal( id_, tid[THREAD_MSG_QUEUE] )) {
+    if(( msqid = msgget( MQ_KEY, msgflg )) < 0 ) {
+      perror("msgget");
+      printLog( "Get a message queue identifier: ERROR!\n" );
+    } else {
+      printLog( "Get a message queue identifier: [%d] successfully\n", msqid );
+    }
+
+    // message receive loop
+    while( TRUE ) {
+      if( msgrcv( msqid, &rbuf, MSG_SZ, 1, IPC_NOWAIT | MSG_NOERROR ) < 0 ) {
+        usleep( SLEEP_100MS );
+      } else {
+        printLog( "%s: Incoming command: [%s]\n", __func__, rbuf.mtext );
+        cmdHandler( rbuf.mtext );
+      }
+
+      if( !running ) break;
+      usleep( SLEEP_1MS );
+    }
+  }
+
+  printLog( "Thread %s finished, exit\n", __func__ );
+  *retVal = AWS_FAIL;
+  return NULL;
+}
 
 
 /**

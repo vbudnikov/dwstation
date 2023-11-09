@@ -2,15 +2,14 @@
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
-#include <pthread.h>
 
 #include "dwstation.h"
 
+volatile int running = TRUE;
 const char *nowToday = "Build " __DATE__ " " __TIME__;
 const char *appName  = "dwstation";
 
 MYSQL *SQLConnConfig = NULL;
-
 
 pthread_t tid[THREADS_NUM] = { 0 };
 
@@ -30,11 +29,13 @@ int main( int argc, char **argv )
   int errThread = 0;
 
   int connScannerLoopParam = 0;
-  int connWeigherLoopParam = 6541;
+  int connWeigherLoopParam = 0;
   int scannerLoopParam = 0;
   int weigherLoopParam = 0;
   int checkDBLoopParam = 0;
+  int msgQueueLoopParam = 0;
 
+  running = TRUE;
   printCurrTime();
   fprintf( stderr, "Start %s, %s\n", appName, nowToday );
 
@@ -157,20 +158,35 @@ int main( int argc, char **argv )
   else printLog( "Thread checkDBLoop created successfully\n" );
   usleep( SLEEP_5MS );
 
+  errThread = pthread_create( &(tid[THREAD_MSG_QUEUE]), NULL, &msgQueueLoop, (void *) &msgQueueLoopParam );
+  if( errThread ) printLog( "\nCan't create thread msgQueueLoop: [%s]\n", strerror( errThread ));
+  else printLog( "Thread msgQueueLoop created successfully\n" );
+  usleep( SLEEP_5MS );
+
   //  main loop
   while( TRUE ) {
     flushLogFileBuffer();
     checkTimeLogReopen();
 
-    if( connScannerLoopParam == AWS_FAIL ) {
+    if( connScannerLoopParam == AWS_FAIL ) break;
+    if( connWeigherLoopParam == AWS_FAIL ) break;
+    if( scannerLoopParam     == AWS_FAIL ) break;
+    if( weigherLoopParam     == AWS_FAIL ) break;
+    if( checkDBLoopParam     == AWS_FAIL ) break;
+    if( msgQueueLoopParam    == AWS_FAIL ) break;
 
+    if( !running ) {
       break;
     }
 
     usleep( SLEEP_10MS );
   }
 
-  dwExit( 1 );
+  usleep( SLEEP_1S );
+  closeAllSockets();
+  closeAllSQLConnections();
+
+  fflush( logFile );
 
   return 0;
 }
