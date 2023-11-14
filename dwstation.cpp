@@ -12,8 +12,10 @@
 
 #include "dwstation.h"
 
-MYSQL *SQLConnNewTU = NULL;
-MYSQL *SQLConnCheckSend = NULL;
+#define REQUEST_SELECT_NEW_TU "SELECT uid,barcode,weight,timestamp,status FROM T_dw00resp WHERE status=0 ORDER BY timestamp ASC limit 1"
+
+MYSQL *SQLNewTUHandler = NULL;
+MYSQL *SQLCheckDBHandler = NULL;
 
 int scannerSocketFd = -1;
 int weigherSocketFd = -1;
@@ -107,6 +109,7 @@ void *connScannerLoop( void *arg )
   uint16_t scannerPort = SCANNER_PORT_DEFAULT;
 
   printLog( "Starting %s\n", __func__ );
+  setState( STATE_CONN_SCANNER, STATE_PARAM_UNKNOWN );
 
   scannerPort = uint16_t( atoi( stationConfig.scannerPort ));
   serv_addr.sin_family = AF_INET;
@@ -138,6 +141,7 @@ void *connScannerLoop( void *arg )
                 , stationConfig.scannerIPAddr, stationConfig.scannerPort, strerror( errno ));
         shutdown( scannerSocketFd, SHUT_RDWR ); // test: shutdown
         close( scannerSocketFd );
+        setState( STATE_CONN_SCANNER, STATE_PARAM_NOTOK );
         usleep( SLEEP_2S );
       } else {
         scannerConnected = TRUE;
@@ -150,12 +154,16 @@ void *connScannerLoop( void *arg )
         } else {
           printLog( "setsockopt( TCP_NODELAY ) OK\n" );
         }
+
+        setState( STATE_CONN_SCANNER, STATE_PARAM_OK );
       }
     }
 
     if( !running ) break;
     usleep( SLEEP_100MS );
   } // while( TRUE )
+
+  setState( STATE_CONN_SCANNER, STATE_PARAM_UNKNOWN );
 
   printLog( "Thread connScannerLoop finished, exit\n"  );
   *retVal = AWS_FAIL;
@@ -170,14 +178,20 @@ void *connWeigherLoop( void *arg )
   int *retVal = (int*) arg;
 
   printLog( "Starting %s\n", __func__ );
+  setState( STATE_CONN_WEIGHER, STATE_PARAM_UNKNOWN );
 
   weigherConnected = FALSE; // volatile: need to initialize
+
+  if( weigherConnected ) setState( STATE_CONN_WEIGHER, STATE_PARAM_OK );
+  else setState( STATE_CONN_WEIGHER, STATE_PARAM_NOTOK );
 
   while( TRUE ) {
 
     if( !running ) break;
     usleep( SLEEP_5MS );
   } // while( TRUE )
+
+  setState( STATE_CONN_WEIGHER, STATE_PARAM_UNKNOWN );
 
   printLog( "Thread connWeigherLoop finished, exit\n"  );
   *retVal = AWS_FAIL;
@@ -290,34 +304,40 @@ void *scannerLoop( void *arg )
 void *weigherLoop( void *arg )
 {
   int *retVal = (int*) arg;
-  int SQLInited = 0;
-  int SQLConnected = 0;
-  int insertOK = 0;
+  // MySQL
+  int isSQLInited = FALSE;
+  int isSQLConnected = FALSE;
+  int insertOK = FALSE;
   unsigned int weight = 0;
+  char dquery[DYN_QUERY_SZ] = { 0 };
 
   printLog( "Starting %s\n", __func__ );
+  setState( STATE_CONN_DB, STATE_PARAM_UNKNOWN );
 
    // connecting to MySQL
-  if(( SQLConnNewTU = mysql_init( NULL )) == NULL ) {
-    SQLInited = FALSE;
-    printLog( "SQL (new TU): init error: %s\n", mysql_error( SQLConnNewTU ));
+  if(( SQLNewTUHandler = mysql_init( NULL )) == NULL ) {
+    isSQLInited = FALSE;
+    printLog( "SQL (new TU): init error: %s\n", mysql_error( SQLNewTUHandler ));
   } else {
-    SQLInited = TRUE;
+    isSQLInited = TRUE;
     printLog( "SQL (new TU): init OK\n" );
   }
 
-  if( mysql_real_connect( SQLConnNewTU, "127.0.0.1", "dwstation", "dwstation", "dwstation", 0, NULL, 0 ) == NULL ) {
-    SQLConnected = FALSE;
-    printLog( "SQL (new TU): connect error: %s\n", mysql_error( SQLConnNewTU ));
+  if( mysql_real_connect( SQLNewTUHandler, MYSQL_HOST, MYSQL_USER, MYSQL_PASSWORD, MYSQL_DB, 0, NULL, 0 ) == NULL ) {
+    isSQLConnected = FALSE;
+    printLog( "SQL (new TU): connect error: %s\n", mysql_error( SQLNewTUHandler ));
   } else {
-    SQLConnected = TRUE;
+    isSQLConnected = TRUE;
     printLog( "SQL (new TU): connect OK\n" );
   }
 
   // TODO: implement reconnection
-  if( ! ( SQLInited && SQLConnected )) {
+  if( ! ( isSQLInited && isSQLConnected )) {
     printLog( "SQL (new TU): error creating SQL connection, exit" );
+    setState( STATE_CONN_DB, STATE_PARAM_NOTOK );
     exit( 1 );
+  } else {
+    setState( STATE_CONN_DB, STATE_PARAM_OK );
   }
 
   while( TRUE ) {
@@ -326,17 +346,15 @@ void *weigherLoop( void *arg )
 
       weight = getWeightTest();
       sprintf( currTUParam.weight, "%u", weight ); // filling barcode
-
       printLog( "Current weight = [%s]\n", currTUParam.weight );
 
       // check current TU: barcode and weight isn't empty
       if(( currTUParam.barcode[0] != '\0' ) && ( currTUParam.weight[0] != '\0' )) {
-        char dquery[DYN_QUERY_SZ] = { 0 };
         sprintf( dquery, "INSERT INTO T_dw00resp (barcode,weight) values ('%s','%s')", currTUParam.barcode, currTUParam.weight );
         printLog( "SQL (new TU): [%s]\n", dquery );
 
-        if( mysql_query( SQLConnNewTU, dquery )) {
-          printLog( "SQL (new TU): insert  error: %s\n", mysql_sqlstate( SQLConnNewTU ));
+        if( mysql_query( SQLNewTUHandler, dquery )) {
+          printLog( "SQL (new TU): insert  error: %s\n", mysql_sqlstate( SQLNewTUHandler ));
           insertOK = FALSE;
         } else {
           insertOK = TRUE;
@@ -352,9 +370,9 @@ void *weigherLoop( void *arg )
     usleep( SLEEP_1MS );
   } // while( TRUE )
 
-  if( SQLConnNewTU ) {
-    mysql_close( SQLConnNewTU );
-    SQLConnNewTU = NULL;
+  if( SQLNewTUHandler ) {
+    mysql_close( SQLNewTUHandler );
+    SQLNewTUHandler = NULL;
   }
 
   printLog( "Thread weigherLoop finished, exit\n"  );
@@ -372,14 +390,15 @@ void *checkDBLoop( void *arg )
   // MySQL
   MYSQL_RES *SQLSelectResult = NULL;
   MYSQL_ROW row = NULL;  // for current row parsing
-  int SQLInited = 0;
-  int SQLConnected = 0;
-  int selectOK = 0;
-  int updateOK = 0;
-  int recordFound = 0;
+  int isSQLInited = FALSE;
+  int isSQLConnected = FALSE;
+  int selectOK = FALSE;
+  int updateOK = FALSE;
+  int recordFound = FALSE;
   unsigned int weightRecordNumFields = 0;
 
   printLog( "Starting %s\n", __func__ );
+  setState( STATE_CONN_DB, STATE_PARAM_UNKNOWN );
 
   // cURL + JSON
   char json[JSON_BUF_LEN] = { 0 };
@@ -390,51 +409,52 @@ void *checkDBLoop( void *arg )
   struct curl_slist *slist = NULL;
   long httpServerResponseCode = 0;
 
-   curl_global_init( CURL_GLOBAL_NOTHING );
+  curl_global_init( CURL_GLOBAL_NOTHING );
 
    // connecting to MySQL
-  if(( SQLConnCheckSend = mysql_init( NULL )) == NULL ) {
-    printLog( "SQL (check send): init error: %s\n", mysql_error( SQLConnCheckSend ));
-    SQLInited = FALSE;
+  if(( SQLCheckDBHandler = mysql_init( NULL )) == NULL ) {
+    printLog( "SQL (check DB): init error: %s\n", mysql_error( SQLCheckDBHandler ));
+    isSQLInited = FALSE;
   } else {
-    SQLInited = TRUE;
-    printLog( "SQL (check send): init OK\n" );
+    isSQLInited = TRUE;
+    printLog( "SQL (check DB): init OK\n" );
   }
 
-  if( mysql_real_connect( SQLConnCheckSend, "127.0.0.1", "dwstation", "dwstation", "dwstation", 0, NULL, 0 ) == NULL ) {
-    printLog( "SQL (check send): connect error: %s\n", mysql_error( SQLConnCheckSend ));
-    SQLConnected = FALSE;
+  if( mysql_real_connect( SQLCheckDBHandler, MYSQL_HOST, MYSQL_USER, MYSQL_PASSWORD, MYSQL_DB, 0, NULL, 0 ) == NULL ) {
+    printLog( "SQL (check DB): connect error: %s\n", mysql_error( SQLCheckDBHandler ));
+    isSQLConnected = FALSE;
   } else {
-    SQLConnected = TRUE;
-    printLog( "SQL (check send): connect OK\n" );
+    isSQLConnected = TRUE;
+    printLog( "SQL (check DB): connect OK\n" );
   }
 
   // TODO: implement reconnection
-  if( ! ( SQLInited && SQLConnected )) {
-    printLog( "SQL (check send): error creating SQL connection, exit" );
+  if( ! ( isSQLInited && isSQLConnected )) {
+    printLog( "SQL (check DB): error creating SQL connection, exit" );
+    setState( STATE_CONN_DB, STATE_PARAM_NOTOK );
     exit( 1 );
+  } else {
+    setState( STATE_CONN_DB, STATE_PARAM_OK );
   }
 
   printLog( "Checking the DB for new records\n" );
 
   while( TRUE ) {
     // Getting weight data
-    if( SQLInited && SQLConnected ) {
+    if( isSQLInited && isSQLConnected ) {
       // First not processed weight record
-      if( mysql_query( SQLConnCheckSend
-                     , "SELECT uid,barcode,weight,timestamp,status FROM T_dw00resp"
-                       " WHERE status=0 ORDER BY timestamp ASC limit 1" )) {
+      if( mysql_query( SQLCheckDBHandler, REQUEST_SELECT_NEW_TU )) {
         selectOK = FALSE;
-        printLog( "SQL (check send): select weight data error: %s\n", mysql_sqlstate( SQLConnCheckSend ));
+        printLog( "SQL (check DB): select weight data error: %s\n", mysql_sqlstate( SQLCheckDBHandler ));
       } else {
         selectOK = TRUE; // Don't log this result
       }
 
       if( selectOK ) {
-        SQLSelectResult = mysql_store_result( SQLConnCheckSend );
+        SQLSelectResult = mysql_store_result( SQLCheckDBHandler );
 
         if( SQLSelectResult == NULL ) {
-          printLog( "SQL (check send): store result error: %s\n", mysql_sqlstate( SQLConnCheckSend ));
+          printLog( "SQL (check DB): store result error: %s\n", mysql_sqlstate( SQLCheckDBHandler ));
         }
       }
     }
@@ -445,7 +465,7 @@ void *checkDBLoop( void *arg )
 
       if( row ) {
         recordFound = TRUE;
-        printLog( "SQL (check send): new record found\n" );
+        printLog( "SQL (check DB): new record found\n" );
 
         if( row[UID_INDEX] )       strcpy( weightRecord.uid,       row[UID_INDEX] );
         if( row[BARCODE_INDEX] )   strcpy( weightRecord.barcode,   row[BARCODE_INDEX] );
@@ -453,7 +473,7 @@ void *checkDBLoop( void *arg )
         if( row[TIMESTAMP_INDEX] ) strcpy( weightRecord.timestamp, row[TIMESTAMP_INDEX] );
         if( row[STATUS_INDEX] )    strcpy( weightRecord.status,    row[STATUS_INDEX] );
 
-        printLog( "SQL (check send): selected %d fields: [%s] [%s] [%s] [%s] [%s]\n"
+        printLog( "SQL (check DB): selected %d fields: [%s] [%s] [%s] [%s] [%s]\n"
                 , weightRecordNumFields, weightRecord.uid, weightRecord.barcode
                 , weightRecord.weight, weightRecord.timestamp, weightRecord.status );
       } else {
@@ -509,22 +529,25 @@ void *checkDBLoop( void *arg )
         if( httpServerResponseCode == HTTP_RESPONSE_CODE_OK ) {
           char dquery[DYN_QUERY_SZ] = { 0 };
           sprintf( dquery, "UPDATE T_dw00resp SET status='1' WHERE uid='%s'", weightRecord.uid );
-          printLog( "SQL (check send): [%s]\n", dquery );
+          printLog( "SQL (check DB): [%s]\n", dquery );
 
-          if( mysql_query( SQLConnCheckSend, dquery )) {
+          if( mysql_query( SQLCheckDBHandler, dquery )) {
             updateOK = FALSE;
           } else {
             updateOK = TRUE;
           }
 
           if( updateOK ) {
-            printLog( "SQL (check send): update OK\n" );
+            printLog( "SQL (check DB): update OK\n" );
           } else {
-            printLog( "SQL (check send): update error: %s\n", mysql_sqlstate( SQLConnCheckSend ));
+            printLog( "SQL (check DB): update error: %s\n", mysql_sqlstate( SQLCheckDBHandler ));
           }
         }
+
+        setState( STATE_CONN_HTTP, STATE_PARAM_OK );
       } else {
         printLog( "CURL perform error: %s, sleep for %us\n", strerror( errno ), SLEEP_2S / ONE_SECOND );
+        setState( STATE_CONN_HTTP, STATE_PARAM_NOTOK );
         usleep( SLEEP_2S ); // sleep 2s
       }
 
@@ -536,12 +559,15 @@ void *checkDBLoop( void *arg )
     usleep( CHECK_DB_DELAY ); // sleep 500ms
   } // while( TRUE )
 
-  if( SQLConnCheckSend ) {
-    mysql_close( SQLConnCheckSend );
-    SQLConnCheckSend = NULL;
+  if( SQLCheckDBHandler ) {
+    mysql_close( SQLCheckDBHandler );
+    SQLCheckDBHandler = NULL;
   }
 
   curl_global_cleanup();
+
+  setState( STATE_CONN_DB, STATE_PARAM_UNKNOWN );
+  setState( STATE_CONN_HTTP, STATE_PARAM_UNKNOWN );
 
   printLog( "Thread checkDBLoop finished, exit\n"  );
   *retVal = AWS_FAIL;

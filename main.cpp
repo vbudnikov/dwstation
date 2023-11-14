@@ -9,7 +9,7 @@ volatile int running = TRUE;
 const char *nowToday = "Build " __DATE__ " " __TIME__;
 const char *appName  = "dwstation";
 
-MYSQL *SQLConnConfig = NULL;
+MYSQL *SQLConfigHandler = NULL;
 
 pthread_t tid[THREADS_NUM] = { 0 };
 
@@ -20,11 +20,11 @@ int main( int argc, char **argv )
 {
   MYSQL_RES *SQLSelectResult = NULL;
   MYSQL_ROW row = NULL; // for current row parsing
-  int SQLInited = 0;
-  int SQLConnected = 0;
-  int stationConfigSelectOK = 0;
-  int stationConfigOK = 0;
-  int stationConfigNumFields = 0;
+  int isSQLInited = FALSE;
+  int isSQLConnected = FALSE;
+  int stationConfigSelectOK = FALSE;
+  int stationConfigOK = FALSE;
+  int stationConfigNumFields = FALSE;
 
   int errThread = 0;
 
@@ -35,7 +35,7 @@ int main( int argc, char **argv )
   int checkDBLoopParam = 0;
   int msgQueueLoopParam = 0;
 
-  running = TRUE;
+  running = TRUE; // global flag for all threads
   printCurrTime();
   fprintf( stderr, "Start %s, %s\n", appName, nowToday );
 
@@ -44,33 +44,44 @@ int main( int argc, char **argv )
 
   printLog( "Start %s, %s\n", appName, nowToday );
 
-  strcpy( stationConfig.serverAddr, SERVER_ADDR_DEFAULT ); // setting default http server address
+  // set state
+  setState( STATE_STARTING, STATE_PARAM_OK );
+  setState( STATE_CONFIG, STATE_PARAM_UNKNOWN );
+  setState( STATE_CONN_SCANNER, STATE_PARAM_UNKNOWN );
+  setState( STATE_CONN_WEIGHER, STATE_PARAM_UNKNOWN );
+  setState( STATE_CONN_DB, STATE_PARAM_UNKNOWN );
+  setState( STATE_CONN_HTTP, STATE_PARAM_UNKNOWN );
+
+  // setting default http server address
+  strcpy( stationConfig.serverAddr, SERVER_ADDR_DEFAULT );
 
   printLog( "Getting station configuration\n" );
 
   // Config from MySQL
-  if(( SQLConnConfig = mysql_init( NULL )) == NULL ) {
-    printLog( "SQL (config): init error: %s\n", mysql_error( SQLConnConfig ));
-    SQLInited = FALSE;
+  if(( SQLConfigHandler = mysql_init( NULL )) == NULL ) {
+    printLog( "SQL (config): init error: %s\n", mysql_error( SQLConfigHandler ));
+    isSQLInited = FALSE;
+    exit( AWS_FAIL );
   } else {
-    SQLInited = TRUE;
+    isSQLInited = TRUE;
     printLog( "SQL (config): init OK\n" );
   }
 
-  if( mysql_real_connect( SQLConnConfig, "127.0.0.1", "dwstation", "dwstation", "dwstation", 0, NULL, 0 ) == NULL ) {
-    printLog( "SQL (config): connect error: %s\n", mysql_error( SQLConnConfig ));
-    SQLConnected = FALSE;
+  if( mysql_real_connect( SQLConfigHandler, MYSQL_HOST, MYSQL_USER, MYSQL_PASSWORD, MYSQL_DB, 0, NULL, 0 ) == NULL ) {
+    printLog( "SQL (config): connect error: %s\n", mysql_error( SQLConfigHandler ));
+    isSQLConnected = FALSE;
+    exit( AWS_FAIL );
   } else {
-    SQLConnected = TRUE;
+    isSQLConnected = TRUE;
     printLog( "SQL (config): connect OK\n" );
   }
 
-  if( SQLInited && SQLConnected ) {
+  if( isSQLInited && isSQLConnected ) {
     // Getting config data
-    if( mysql_query( SQLConnConfig
+    if( mysql_query( SQLConfigHandler
                   , "SELECT http_service_addr,login,password,user_id,scannerIPAddr,scannerPort,weigherIPAddr,weigherPort"
                     " FROM T_dw00conf ORDER BY timestamp DESC limit 1" )) {
-      printLog( "SQL (config): select error: %s\n", mysql_sqlstate( SQLConnConfig ));
+      printLog( "SQL (config): select error: %s\n", mysql_sqlstate( SQLConfigHandler ));
       stationConfigSelectOK = FALSE;
     } else {
       stationConfigSelectOK = TRUE;
@@ -78,19 +89,21 @@ int main( int argc, char **argv )
     }
 
     if( stationConfigSelectOK ) {
-      SQLSelectResult = mysql_store_result( SQLConnConfig );
+      SQLSelectResult = mysql_store_result( SQLConfigHandler );
 
       if( SQLSelectResult == NULL ) {
-        printLog( "SQL (config): store config result error: %s\n", mysql_sqlstate( SQLConnConfig ));
+        printLog( "SQL (config): store config result error: %s\n", mysql_sqlstate( SQLConfigHandler ));
       } else {
         stationConfigNumFields = mysql_num_fields( SQLSelectResult );
 
         if( stationConfigNumFields == ( CFG_LAST_INDEX )) {
           stationConfigOK = TRUE;
           printLog( "SQL (config): station config OK\n" );
+          setState( STATE_CONFIG, STATE_PARAM_OK ); // set state
         } else {
           stationConfigOK = FALSE;
           printLog( "SQL (config): station config error: wrong number of fields\n" );
+          setState( STATE_CONFIG, STATE_PARAM_NOTOK ); // set state
         }
 
         if( stationConfigOK ) {
@@ -107,29 +120,29 @@ int main( int argc, char **argv )
             if( row[CFG_WEIGHER_PORT] )      strcpy( stationConfig.weigherPort,   row[CFG_WEIGHER_PORT] );
           } else {
             printLog( "SQL fetch row error, exit\n" );
-            exit( 1 );
+            exit( AWS_FAIL );
           }
         } else {
           printLog( "SQL config structure error, exit\n" );
-          exit( 1 );
+          exit( AWS_FAIL );
         }
 
         mysql_free_result( SQLSelectResult );
       }
     } else {
       printLog( "Error: Unable to get configuration from DB, exit\n" );
-      exit( 1 );
+      exit( AWS_FAIL );
     }
   } else {
     printLog( "Error: SQL init or connect failed, exit\n" );
-    exit( 1 );
+    exit( AWS_FAIL );
   }
 
   // station configuration has been successfully processed, you can close the connection to the database
-  if( SQLConnConfig ) {
+  if( SQLConfigHandler ) {
     printLog( "Connection to MySQL (config) closed\n" );
-    mysql_close( SQLConnConfig );
-    SQLConnConfig = NULL;
+    mysql_close( SQLConfigHandler );
+    SQLConfigHandler = NULL;
   }
 
   // Threads
@@ -181,6 +194,14 @@ int main( int argc, char **argv )
 
     usleep( SLEEP_10MS );
   }
+
+   // set state
+  setState( STATE_STARTING, STATE_PARAM_NOTOK );
+  setState( STATE_CONFIG, STATE_PARAM_UNKNOWN );
+  setState( STATE_CONN_SCANNER, STATE_PARAM_UNKNOWN );
+  setState( STATE_CONN_WEIGHER, STATE_PARAM_UNKNOWN );
+  setState( STATE_CONN_DB, STATE_PARAM_UNKNOWN );
+  setState( STATE_CONN_HTTP, STATE_PARAM_UNKNOWN );
 
   usleep( SLEEP_1S );
   closeAllSockets();

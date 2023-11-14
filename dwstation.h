@@ -67,9 +67,15 @@
 #define TIMESTAMP_INDEX           3
 #define STATUS_INDEX              4
 
-#define T_CONFIG                  "T_dw00conf" // put in order
-#define T_RESPONSE                "T_dw00resp" // put in order
+// MySQL
+#define MYSQL_HOST                "localhost"
+#define MYSQL_USER                "dwstation"
+#define MYSQL_PASSWORD            "dwstation"
+#define MYSQL_DB                  "dwstation"
+#define T_CONFIG                  "T_dw00conf"
+#define T_RESPONSE                "T_dw00resp"
 
+// HTTP-server
 #define SERVER_ADDR_DEFAULT       "http://127.0.0.1\0"
 #define SERVER_RESPONSE_TIMEOUT   1
 #define SERVER_COMPLETE_TIMEOUT   2
@@ -117,6 +123,26 @@
 #define CMD_RESTART_CMD           "restart"
 #define CMD_RESTART_PARAM         "TRUE"
 
+#define STATE_BOOTING             0
+#define STATE_STARTING            1
+#define STATE_CONFIG              2
+#define STATE_CONN_SCANNER        3
+#define STATE_CONN_WEIGHER        4
+#define STATE_CONN_DB             5
+#define STATE_CONN_HTTP           6
+
+#define STATE_PARAM_OK            0
+#define STATE_PARAM_NOTOK         1
+#define STATE_PARAM_UNKNOWN       2
+
+#define FILE_STATE_BOOTING        "/mnt/ssd/dwstation/state/booting.txt"
+#define FILE_STATE_STARTING       "/mnt/ssd/dwstation/state/starting.txt"
+#define FILE_STATE_CONFIG         "/mnt/ssd/dwstation/state/config.txt"
+#define FILE_STATE_CONN_SCANNER   "/mnt/ssd/dwstation/state/connscanner.txt"
+#define FILE_STATE_CONN_WEIGHER   "/mnt/ssd/dwstation/state/connweigher.txt"
+#define FILE_STATE_CONN_DB        "/mnt/ssd/dwstation/state/conndb.txt"
+#define FILE_STATE_CONN_HTTP      "/mnt/ssd/dwstation/state/connhttp.txt"
+
 extern volatile int running;
 extern const char *nowToday;
 extern const char *appName;
@@ -153,9 +179,9 @@ extern struct stStationConfig stationConfig;
 extern struct stWeightRecord  weightRecord;
 extern struct stCurrTUParam   currTUParam;
 
-extern MYSQL *SQLConnConfig;
-extern MYSQL *SQLConnNewTU;
-extern MYSQL *SQLConnCheckSend;
+extern MYSQL *SQLConfigHandler;
+extern MYSQL *SQLNewTUHandler;
+extern MYSQL *SQLCheckDBHandler;
 
 void handlersSetup( void );
 void pinSetup( void );
@@ -187,5 +213,6 @@ int cmdHandler( char *data );
 void calcelAllThreads( void );
 void closeAllSockets( void );
 void closeAllSQLConnections( void );
+int setState( int state, int param );
 
 #endif /* DWSTATION_H */

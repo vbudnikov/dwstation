@@ -11,7 +11,7 @@
 
 #include "dwstation.h"
 
-volatile int logFileUpdated = 0;
+volatile int logFileUpdated = FALSE;
 struct timeval tsRawtime;
 FILE *logFile = NULL;
 char errLogFileName[LOG_FILE_NAME_SZ] = { 0 };
@@ -30,6 +30,14 @@ static void ctrlCHandler( int signum )
   closeAllSQLConnections();
 
   curl_global_cleanup();
+
+
+  setState( STATE_STARTING, STATE_PARAM_NOTOK );
+  setState( STATE_CONFIG, STATE_PARAM_UNKNOWN );
+  setState( STATE_CONN_SCANNER, STATE_PARAM_UNKNOWN );
+  setState( STATE_CONN_WEIGHER, STATE_PARAM_UNKNOWN );
+  setState( STATE_CONN_DB, STATE_PARAM_UNKNOWN );
+  setState( STATE_CONN_HTTP, STATE_PARAM_UNKNOWN );
 
   printLog( "%s terminated\n", appName );
   fflush( logFile );
@@ -175,19 +183,19 @@ void closeAllSQLConnections( void )
 {
   printLog( "Close SQL connections\n" );
 
-  if( SQLConnConfig ) {
+  if( SQLConfigHandler ) {
     printLog( "Connection to MySQL (station configuration) closed\n" );
-    mysql_close( SQLConnConfig );
+    mysql_close( SQLConfigHandler );
   }
 
-  if( SQLConnNewTU ) {
+  if( SQLNewTUHandler ) {
     printLog( "Connection to MySQL (new TU) closed\n" );
-    mysql_close( SQLConnNewTU );
+    mysql_close( SQLNewTUHandler );
   }
 
-  if( SQLConnCheckSend ) {
-    printLog( "Connection to MySQL (check send) closed\n" );
-    mysql_close( SQLConnCheckSend );
+  if( SQLCheckDBHandler ) {
+    printLog( "Connection to MySQL (check DB) closed\n" );
+    mysql_close( SQLCheckDBHandler );
   }
 }
 
@@ -256,7 +264,7 @@ void printLog( const char *format, ... )
   char *logBufLoweredPtr = NULL;
   const uint8_t nCnt = 8;
 
-  logFileUpdated = 1; // set flag
+  logFileUpdated = TRUE; // set flag
 
   gettimeofday( &tsRawtime, NULL );
 
@@ -377,8 +385,7 @@ void flushLogFileBuffer( void )
     timePrev = timeCurr;
 
     if( logFileUpdated ) {
-      logFileUpdated = 0; // reset flag
-      // printLog( "Flushing log file buffer\n" ); // ###
+      logFileUpdated = FALSE; // reset flag
       fflush( logFile );
     }
   }
@@ -478,4 +485,95 @@ int cmdHandler( char *data )
   }
 
   return retVal;
+}
+
+/**
+*/
+int setState( int state, int param )
+{
+  int retVal = AWS_SUCCESS;
+  FILE *fp = NULL;
+
+  switch( state ) {
+    case STATE_BOOTING:
+      if(( fp = fopen( FILE_STATE_BOOTING, "w" ))) {
+        ( param == STATE_PARAM_OK ) ? fprintf( fp, "OK" ) : fprintf( fp, "в процессе" );
+        fclose( fp );
+      } else {
+        retVal = AWS_FAIL;
+      }
+      break;
+
+    case STATE_STARTING:
+      if(( fp = fopen( FILE_STATE_STARTING, "w" ))) {
+        ( param == STATE_PARAM_OK ) ? fprintf( fp, "OK" ) : fprintf( fp, "запускается" );
+        fclose( fp );
+      } else {
+        retVal = AWS_FAIL;
+      }
+      break;
+
+    case STATE_CONFIG:
+      if(( fp = fopen( FILE_STATE_CONFIG, "w" ))) {
+        if ( param == STATE_PARAM_OK ) fprintf( fp, "OK" );
+        else if( param == STATE_PARAM_NOTOK ) fprintf( fp, "ошибка" );
+        else if( param == STATE_PARAM_UNKNOWN ) fprintf( fp, "???" );
+        fclose( fp );
+      } else {
+        retVal = AWS_FAIL;
+      }
+      break;
+
+    case STATE_CONN_SCANNER:
+      if(( fp = fopen( FILE_STATE_CONN_SCANNER, "w" ))) {
+        if ( param == STATE_PARAM_OK ) fprintf( fp, "OK" );
+        else if( param == STATE_PARAM_NOTOK ) fprintf( fp, "нет связи" );
+        else if( param == STATE_PARAM_UNKNOWN ) fprintf( fp, "???" );
+        fclose( fp );
+      } else {
+        retVal = AWS_FAIL;
+      }
+      break;
+
+    case STATE_CONN_WEIGHER:
+      if(( fp = fopen( FILE_STATE_CONN_WEIGHER, "w" ))) {
+        if ( param == STATE_PARAM_OK ) fprintf( fp, "OK" );
+        else if( param == STATE_PARAM_NOTOK ) fprintf( fp, "нет связи" );
+        else if( param == STATE_PARAM_UNKNOWN ) fprintf( fp, "???" );
+        fclose( fp );
+      } else {
+        retVal = AWS_FAIL;
+      }
+      break;
+
+    case STATE_CONN_DB:
+      if(( fp = fopen( FILE_STATE_CONN_DB, "w" ))) {
+        if ( param == STATE_PARAM_OK ) fprintf( fp, "OK" );
+        else if( param == STATE_PARAM_NOTOK ) fprintf( fp, "нет связи" );
+        else if( param == STATE_PARAM_UNKNOWN ) fprintf( fp, "???" );
+        fclose( fp );
+      } else {
+        retVal = AWS_FAIL;
+      }
+      break;
+
+    case STATE_CONN_HTTP:
+      if(( fp = fopen( FILE_STATE_CONN_HTTP, "w" ))) {
+        if ( param == STATE_PARAM_OK ) fprintf( fp, "OK" );
+        else if( param == STATE_PARAM_NOTOK ) fprintf( fp, "нет связи" );
+        else if( param == STATE_PARAM_UNKNOWN ) fprintf( fp, "???" );
+        fclose( fp );
+      } else {
+        retVal = AWS_FAIL;
+      }
+      break;
+
+    default:
+      break;
+  }
+
+  printLog( "%s: state [%d], param [%d] set %s\n"
+          , __func__, state, param, (retVal == AWS_SUCCESS) ? "OK" : "Fail" );
+
+  return( retVal );
 }
