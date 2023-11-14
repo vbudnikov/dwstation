@@ -386,7 +386,6 @@ void *weigherLoop( void *arg )
 void *checkDBLoop( void *arg )
 {
   int *retVal = (int*) arg;
-
   // MySQL
   MYSQL_RES *SQLSelectResult = NULL;
   MYSQL_ROW row = NULL;  // for current row parsing

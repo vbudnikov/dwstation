@@ -135,13 +135,13 @@
 #define STATE_PARAM_NOTOK         1
 #define STATE_PARAM_UNKNOWN       2
 
-#define FILE_STATE_BOOTING        "/mnt/ssd/dwstation/state/booting.txt"
-#define FILE_STATE_STARTING       "/mnt/ssd/dwstation/state/starting.txt"
-#define FILE_STATE_CONFIG         "/mnt/ssd/dwstation/state/config.txt"
-#define FILE_STATE_CONN_SCANNER   "/mnt/ssd/dwstation/state/connscanner.txt"
-#define FILE_STATE_CONN_WEIGHER   "/mnt/ssd/dwstation/state/connweigher.txt"
-#define FILE_STATE_CONN_DB        "/mnt/ssd/dwstation/state/conndb.txt"
-#define FILE_STATE_CONN_HTTP      "/mnt/ssd/dwstation/state/connhttp.txt"
+#define FILE_STATE_BOOTING        "/mnt/ramdisk/dwstation/state/booting.txt"     // "/mnt/ssd/dwstation/state/booting.txt"
+#define FILE_STATE_STARTING       "/mnt/ramdisk/dwstation/state/starting.txt"    // "/mnt/ssd/dwstation/state/starting.txt"
+#define FILE_STATE_CONFIG         "/mnt/ramdisk/dwstation/state/config.txt"      // "/mnt/ssd/dwstation/state/config.txt"
+#define FILE_STATE_CONN_SCANNER   "/mnt/ramdisk/dwstation/state/connscanner.txt" // "/mnt/ssd/dwstation/state/connscanner.txt"
+#define FILE_STATE_CONN_WEIGHER   "/mnt/ramdisk/dwstation/state/connweigher.txt" // "/mnt/ssd/dwstation/state/connweigher.txt"
+#define FILE_STATE_CONN_DB        "/mnt/ramdisk/dwstation/state/conndb.txt"      // "/mnt/ssd/dwstation/state/conndb.txt"
+#define FILE_STATE_CONN_HTTP      "/mnt/ramdisk/dwstation/state/connhttp.txt"    // "/mnt/ssd/dwstation/state/connhttp.txt"
 
 extern volatile int running;
 extern const char *nowToday;
