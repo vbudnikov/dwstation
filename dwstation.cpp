@@ -50,7 +50,7 @@ void pinSetup( void )
   pinMode( PIN_DAT, INPUT );
 
   // wiringPiISR( pin_dat, INT_EDGE_RISING, &sensorEvent );  // INT_EDGE_BOTH
-  wiringPiISR( PIN_DAT, INT_EDGE_FALLING, &sensorEvent );  // ### changed to falling edge for refletive sensor
+  wiringPiISR( PIN_DAT, INT_EDGE_FALLING, &sensorEvent );  // changed to falling edge for refletive sensor
 
   printLog( "Using GPIO pin: PIN%d\n", PIN_DAT );
 
@@ -105,17 +105,17 @@ void *connScannerLoop( void *arg )
 {
   int *retVal = (int*) arg;
   int scannerClientFd = -1;
-  struct sockaddr_in serv_addr;
+  struct sockaddr_in servAddr;
   uint16_t scannerPort = SCANNER_PORT_DEFAULT;
 
   printLog( "Starting %s\n", __func__ );
   setState( STATE_CONN_SCANNER, STATE_PARAM_UNKNOWN );
 
   scannerPort = uint16_t( atoi( stationConfig.scannerPort ));
-  serv_addr.sin_family = AF_INET;
-  serv_addr.sin_port = htons( scannerPort );
+  servAddr.sin_family = AF_INET;
+  servAddr.sin_port = htons( scannerPort );
 
-  if( inet_pton( AF_INET, stationConfig.scannerIPAddr, &serv_addr.sin_addr ) <= 0 ) {
+  if( inet_pton( AF_INET, stationConfig.scannerIPAddr, &servAddr.sin_addr ) <= 0 ) {
     printLog( "Error: Invalid address/ Address not supported, exit\n" );
     exit( 1 );
   }
@@ -133,7 +133,7 @@ void *connScannerLoop( void *arg )
       printLog( "Trying to connect to the the scanner [%s:%s]\n"
               , stationConfig.scannerIPAddr, stationConfig.scannerPort );
 
-      scannerClientFd = connect( scannerSocketFd, (struct sockaddr*) &serv_addr, sizeof( serv_addr ));
+      scannerClientFd = connect( scannerSocketFd, (struct sockaddr*) &servAddr, sizeof( servAddr ));
 
       if( scannerClientFd < 0 ) {
         scannerConnected = FALSE;
@@ -150,9 +150,9 @@ void *connScannerLoop( void *arg )
         setNonblock( scannerSocketFd );
         int flag = 1; // allways 1
         if( setsockopt( scannerSocketFd, IPPROTO_TCP, TCP_NODELAY, (char *) &flag, sizeof(int)) < 0 ) {
-          printLog( "setsockopt( TCP_NODELAY ) error: %s\n", strerror( errno ));
+          printLog( "%s: setsockopt( TCP_NODELAY ) error: %s\n", strerror( errno ), __func__ );
         } else {
-          printLog( "setsockopt( TCP_NODELAY ) OK\n" );
+          printLog( "%s: setsockopt( TCP_NODELAY ) OK\n", __func__ );
         }
 
         setState( STATE_CONN_SCANNER, STATE_PARAM_OK );
@@ -165,7 +165,7 @@ void *connScannerLoop( void *arg )
 
   setState( STATE_CONN_SCANNER, STATE_PARAM_UNKNOWN );
 
-  printLog( "Thread connScannerLoop finished, exit\n"  );
+  printLog( "Thread %s finished, exit\n", __func__  );
   *retVal = AWS_FAIL;
   return( NULL );
 }
@@ -176,24 +176,68 @@ void *connScannerLoop( void *arg )
 void *connWeigherLoop( void *arg )
 {
   int *retVal = (int*) arg;
+  int weigherClientFd = -1;
+  struct sockaddr_in servAddr;
+  uint16_t weigherPort = WEIGHER_PORT_DEFAULT;
 
   printLog( "Starting %s\n", __func__ );
   setState( STATE_CONN_WEIGHER, STATE_PARAM_UNKNOWN );
 
+  weigherPort = uint16_t( atoi( stationConfig.weigherPort ));
+  servAddr.sin_family = AF_INET;
+  servAddr.sin_port = htons( weigherPort );
+
+  if( inet_pton( AF_INET, stationConfig.weigherIPAddr, &servAddr.sin_addr ) <= 0 ) {
+    printLog( "Error: Invalid address/ Address not supported, exit\n" );
+    exit( 1 );
+  }
+
   weigherConnected = FALSE; // volatile: need to initialize
 
-  if( weigherConnected ) setState( STATE_CONN_WEIGHER, STATE_PARAM_OK );
-  else setState( STATE_CONN_WEIGHER, STATE_PARAM_NOTOK );
-
+  //  thread main loop
   while( TRUE ) {
+    while( !weigherConnected ) {
+     if(( weigherSocketFd = socket( AF_INET, SOCK_STREAM, 0 )) < 0 ) {
+        printLog( "Error: Socket creation error, exit\n" );
+        exit( 1 );
+      }
+
+      printLog( "Trying to connect to the the weigher [%s:%s]\n"
+              , stationConfig.weigherIPAddr, stationConfig.weigherPort );
+
+      weigherClientFd = connect( weigherSocketFd, (struct sockaddr*) &servAddr, sizeof( servAddr ));
+
+      if( weigherClientFd < 0 ) {
+        weigherConnected = FALSE;
+        printLog( "Connection to weigher [%s:%s] failed: %s\n"
+                , stationConfig.weigherIPAddr, stationConfig.weigherPort, strerror( errno ));
+        shutdown( weigherSocketFd, SHUT_RDWR ); // test: shutdown
+        close( weigherSocketFd );
+        setState( STATE_CONN_WEIGHER, STATE_PARAM_NOTOK );
+        usleep( SLEEP_2S );
+      } else {
+        weigherConnected = TRUE;
+        printLog( "Connection to weigher [%s:%s] OK\n"
+                , stationConfig.weigherIPAddr, stationConfig.weigherPort );
+        setNonblock( weigherSocketFd );
+        int flag = 1; // allways 1
+        if( setsockopt( weigherSocketFd, IPPROTO_TCP, TCP_NODELAY, (char *) &flag, sizeof(int)) < 0 ) {
+          printLog( "%s: setsockopt( TCP_NODELAY ) error: %s\n", strerror( errno ), __func__ );
+        } else {
+          printLog( "%s: setsockopt( TCP_NODELAY ) OK\n", __func__ );
+        }
+
+        setState( STATE_CONN_WEIGHER, STATE_PARAM_OK );
+      }
+    }
 
     if( !running ) break;
-    usleep( SLEEP_5MS );
+    usleep( SLEEP_100MS );
   } // while( TRUE )
 
   setState( STATE_CONN_WEIGHER, STATE_PARAM_UNKNOWN );
 
-  printLog( "Thread connWeigherLoop finished, exit\n"  );
+  printLog( "Thread %s finished, exit\n", __func__  );
   *retVal = AWS_FAIL;
   return( NULL );
 }
@@ -207,11 +251,10 @@ void *scannerLoop( void *arg )
   ssize_t nsend = 0;
   ssize_t nread = 0;
   uint16_t recvCnt = 0;
-
-  printLog( "Starting %s\n", __func__ );
-
   char msg[SCANNER_SEND_MSG_SZ] = { 0 };
   char buf[SCANNER_RECV_BUF_SZ] = { 0 };
+
+  printLog( "Starting %s\n", __func__ );
 
   pinSetup(); // setup GPIO pin
 
@@ -219,20 +262,23 @@ void *scannerLoop( void *arg )
     // check the receive buffer, it must be empty
     if( scannerConnected ) {
       if( recv( scannerSocketFd, buf, sizeof( buf ), MSG_PEEK ) > 0 ) {
-        printLog( "Receive buffer isn't empty\n" );
-        flushRecvBuffer( scannerSocketFd );
+        printLog( "%s: Receive buffer isn't empty\n", __func__ );
+        flushRecvBuffer( scannerSocketFd, SCANNER_MAX_RECV_CNT );
       }
     }
 
+    // sensor event
     if( sensorScannerEventFlag ) {
       sensorScannerEventFlag = FALSE;
+
       memset( buf, 0, sizeof( buf ));
+      memset( currTUParam.barcode, 0, sizeof( currTUParam.barcode ));
 
       if( scannerConnected ) {
         strcpy( msg, SCANNER_START_TRIG_MSG );
         nsend = send( scannerSocketFd, msg, strlen( msg ), 0 );
 
-        printLog( "> Send: %d bytes [%s]\n", nsend, msg );
+        printLog( "%s: > Send: %d bytes [%s]\n", __func__, nsend, msg );
 
         if( nsend < 0 ) {
           printLog( "Send error: %s\n", strerror( errno ) );
@@ -240,7 +286,7 @@ void *scannerLoop( void *arg )
           scannerConnected = FALSE; // trying to reconnect
           strcpy( buf, BARCODE_SEND_ERROR );
         } else {
-          printLog( "> Read\n" );
+          printLog( "%s: > Read\n", __func__ );
           recvCnt = 0;
 
           while(( nread = recv( scannerSocketFd, buf, sizeof( buf ), 0 )) < 0 ) {
@@ -249,10 +295,10 @@ void *scannerLoop( void *arg )
             usleep( SLEEP_10MS );
           }
 
-          printLog( "recvCnt = %u, nread = %zd\n", recvCnt, nread );
+          printLog( "%s: recvCnt = %u, nread = %zd\n", __func__, recvCnt, nread );
 
           if( nread < 0 ) {
-            printLog( "Read error: %s\n", strerror( errno ));
+            printLog( "%s: Read error: %s\n", __func__, strerror( errno ));
             close( scannerSocketFd ); // closing the connected socket
             scannerConnected = FALSE; // trying to reconnect
             strcpy( buf, BARCODE_DEFAULT );
@@ -264,7 +310,7 @@ void *scannerLoop( void *arg )
               } else {
                 buf[nread - 1] = '\0';
               }
-              printLog( "nread = %d: [%s]\n", nread, buf );
+              printLog( "%s: nread = %d: [%s]\n", __func__, nread, buf );
             } else {
               strcpy( buf, BARCODE_DEFAULT );
             }
@@ -274,7 +320,7 @@ void *scannerLoop( void *arg )
         strcpy( buf, BARCODE_NOCONN );
       }
 
-      printLog( "Final barcode: [%s]\n", buf );
+      printLog( "%s: Final barcode: [%s]\n", __func__, buf );
 
 /*
       // print msg and hex
@@ -293,7 +339,7 @@ void *scannerLoop( void *arg )
     usleep( SLEEP_1MS );
   } // while( TRUE )
 
-  printLog( "Thread scannerLoop finished, exit\n"  );
+  printLog( "Thread %s finished, exit\n", __func__  );
   *retVal = AWS_FAIL;
   return( NULL );
 }
@@ -304,14 +350,19 @@ void *scannerLoop( void *arg )
 void *weigherLoop( void *arg )
 {
   int *retVal = (int*) arg;
+  char buf[WEIGHER_RECV_BUF_SZ] = { 0 };
+  size_t weightLen = 0;
+
   // MySQL
   int isSQLInited = FALSE;
   int isSQLConnected = FALSE;
   int insertOK = FALSE;
-  unsigned int weight = 0;
+  // unsigned int weight = 0;
+  char *currWeight = NULL;
   char dquery[DYN_QUERY_SZ] = { 0 };
 
   printLog( "Starting %s\n", __func__ );
+
   setState( STATE_CONN_DB, STATE_PARAM_UNKNOWN );
 
    // connecting to MySQL
@@ -341,12 +392,35 @@ void *weigherLoop( void *arg )
   }
 
   while( TRUE ) {
+    // check the receive buffer, it must be empty
+    if( weigherConnected ) {
+      if( recv( weigherSocketFd, buf, sizeof( buf ), MSG_PEEK ) > 0 ) {
+        printLog( "%s: Receive buffer isn't empty\n", __func__ );
+        flushRecvBuffer( weigherSocketFd, WEIGHER_MAX_RECV_CNT );
+      }
+    }
+
+    // sensor event
     if( sensorWeigherEventFlag ) {
       sensorWeigherEventFlag = 0;
 
-      weight = getWeightTest();
-      sprintf( currTUParam.weight, "%u", weight ); // filling barcode
-      printLog( "Current weight = [%s]\n", currTUParam.weight );
+      memset( currTUParam.weight, 0, sizeof( currTUParam.weight ));
+      currWeight = getWeight( weigherSocketFd ); // getting weight
+
+      if( currWeight ) {
+        weightLen = strlen( currWeight );
+
+        if( weightLen < WEIGHT_LEN ) {
+          currWeight[weightLen] = '\0';
+          strcpy( currTUParam.weight, currWeight );
+        } else {
+          strcpy( currTUParam.weight, WEIGHT_ERROR );
+        }
+      } else {
+        strcpy( currTUParam.weight, WEIGHT_ERROR );
+      }
+
+      printLog( "%s: Current weight = [%s]\n", __func__, currTUParam.weight );
 
       // check current TU: barcode and weight isn't empty
       if(( currTUParam.barcode[0] != '\0' ) && ( currTUParam.weight[0] != '\0' )) {
@@ -375,7 +449,7 @@ void *weigherLoop( void *arg )
     SQLNewTUHandler = NULL;
   }
 
-  printLog( "Thread weigherLoop finished, exit\n"  );
+  printLog( "Thread %s finished, exit\n", __func__  );
   *retVal = AWS_FAIL;
   return( NULL );
 }
@@ -568,7 +642,7 @@ void *checkDBLoop( void *arg )
   setState( STATE_CONN_DB, STATE_PARAM_UNKNOWN );
   setState( STATE_CONN_HTTP, STATE_PARAM_UNKNOWN );
 
-  printLog( "Thread checkDBLoop finished, exit\n"  );
+  printLog( "Thread %s finished, exit\n", __func__  );
   *retVal = AWS_FAIL;
   return( NULL );
 }
@@ -613,15 +687,70 @@ void *msgQueueLoop( void *arg )
   return NULL;
 }
 
-
 /**
 */
-uint16_t getWeightTest()
+char *getWeight( int socket )
 {
-  uint16_t retVal = 0;
+  // uint16_t retVal = 0;
+  ssize_t nread = 0;
+  uint16_t recvCnt = 0;
+  char recvBuf[WEIGHER_RECV_BUF_SZ] = { 0 };
+  char weight[WEIGHT_LEN] = { 0 };
+  char rawWeight[WEIGHT_LEN] = { 0 };
+  char *ptr = NULL;
+  size_t weightLen = 0;
 
-  retVal = ( 1000 * ( 1 + (uint16_t)( rand() % 10 ))) + (uint16_t)( rand() % 1000 );
-  usleep( SLEEP_2S ); // delay simulation
+  printLog( "%s: > Read\n", __func__ );
+  recvCnt = 0;
 
-  return( retVal );
+  memset( recvBuf, 0, sizeof( recvBuf ));
+  memset( weight, 0, sizeof( weight ));
+  memset( rawWeight, 0, sizeof( rawWeight ));
+
+  if( weigherConnected ) {
+    while(( nread = recv( socket, recvBuf, sizeof( recvBuf ), 0 )) < 0 ) {
+      recvCnt++;
+      if( recvCnt >= WEIGHER_MAX_RECV_CNT ) break;
+      usleep( SLEEP_10MS );
+    }
+
+    printLog( "%s: recvCnt = %u, nread = %zd\n", __func__, recvCnt, nread );
+
+    if( nread < 0 ) {
+      printLog( "%s: Read error: %s\n", __func__, strerror( errno ));
+      close( socket ); // closing the connected socket
+      weigherConnected = FALSE; // trying to reconnect
+      strcpy( weight, WEIGHT_DEFAULT );
+    } else {
+      if( nread > 0 ) {
+        recvBuf[nread] = '\0';
+        printLog( "%s: nread = %d: [%s]\n", __func__, nread, recvBuf );
+
+        // message from the weigher: STX + data + ETX
+        if(( nread == WEIGHER_MSG_SZ ) &&  ( recvBuf[0] == CHAR_STX ) && ( recvBuf[nread-1] == CHAR_ETX )) {
+          strncpy( rawWeight, &recvBuf[1], nread - 2 ); // data = nread - STX - ETX
+          rawWeight[WEIGHT_BUF_SZ-1] = '\0';
+          ptr = rawWeight;
+
+          while( *ptr == '0' ) ptr++;
+
+          weightLen = strlen( ptr );
+          strncpy( weight, ptr, weightLen);
+          weight[weightLen] = '\0';
+        } else {
+          strcpy( weight, WEIGHT_WRONG_FORMAT );
+        }
+      } else {
+        strcpy( weight, WEIGHT_DEFAULT );
+      }
+    }
+  } else {
+    strcpy( weight, WEIGHT_NOCONN );
+  }
+
+  ptr = weight;
+
+  printLog( "%s: Final weight: [%s], ptr = [%s]\n", __func__, weight, ptr ); // ### FIXIT: remove print ptr
+
+  return( ptr );
 }

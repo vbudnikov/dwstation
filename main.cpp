@@ -40,11 +40,16 @@ int main( int argc, char **argv )
   fprintf( stderr, "Start %s, %s\n", appName, nowToday );
 
   handlersSetup();
-  openLog();
+
+  if( openLog() == AWS_FAIL ) {
+    fprintf( stderr, "Error: can't open log file, exit\n" );
+    exit( AWS_FAIL );
+  }
 
   printLog( "Start %s, %s\n", appName, nowToday );
 
   // set state
+  setState( STATE_BOOTING, STATE_PARAM_OK );
   setState( STATE_STARTING, STATE_PARAM_OK );
   setState( STATE_CONFIG, STATE_PARAM_UNKNOWN );
   setState( STATE_CONN_SCANNER, STATE_PARAM_UNKNOWN );
@@ -192,6 +197,7 @@ int main( int argc, char **argv )
       break;
     }
 
+    setStateCurrTime();
     usleep( SLEEP_10MS );
   }
 
@@ -203,11 +209,14 @@ int main( int argc, char **argv )
   setState( STATE_CONN_DB, STATE_PARAM_UNKNOWN );
   setState( STATE_CONN_HTTP, STATE_PARAM_UNKNOWN );
 
+  calcelAllThreads();
+
   usleep( SLEEP_1S );
+
   closeAllSockets();
   closeAllSQLConnections();
 
   fflush( logFile );
 
-  return 0;
+  return( AWS_SUCCESS );
 }

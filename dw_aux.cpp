@@ -40,7 +40,7 @@ static void ctrlCHandler( int signum )
   setState( STATE_CONN_HTTP, STATE_PARAM_UNKNOWN );
 
   printLog( "%s terminated\n", appName );
-  fflush( logFile );
+  if( logFile ) fflush( logFile );
 
   (void)( signum );
   exit( 0 );
@@ -69,7 +69,6 @@ void calcelAllThreads( void )
 
   // connScannerLoop
   s = pthread_cancel( tid[THREAD_CONN_SCANNER] );
-
   if( s == 0 ) {
     printLog( "connScannerLoop: pthread_cancel OK\n" );
   } else {
@@ -225,7 +224,7 @@ int openLog( void )
   char logFileName[LOG_FILE_NAME_SZ] = { 0 };
   char sysCmd[SYS_CMD_SZ] = { 0 };
   uint16_t i = 0;
-  const uint16_t nAttempts = 10;
+  const uint16_t nAttempts = 5;
 
   sprintf( errLogFileName, "%sdwstation-error-%04d-%02d-%02d-%02d.%02d.%02d.log"
          , errLogsPath, tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec );
@@ -237,7 +236,7 @@ int openLog( void )
     logFile = fopen( logFileName, "w+" );
 
     if( logFile ) {
-    	return( 0 ); // ok
+    	return( AWS_SUCCESS ); // ok
     } else {
       fprintf( stderr, "\n[-] Failed to open file %s\n", logFileName );
       fprintf( stderr, "Error description is: %s\n", strerror( errno ));
@@ -248,7 +247,7 @@ int openLog( void )
     }
   }
 
-  return( 1 ); // error
+  return( AWS_FAIL ); // error
 }
 
 /**
@@ -263,6 +262,11 @@ void printLog( const char *format, ... )
   static FILE *errLogFile = NULL;
   char *logBufLoweredPtr = NULL;
   const uint8_t nCnt = 8;
+
+  if( logFile == NULL ) {
+    fprintf( stderr, "%s: Error: log file is not open\n", __func__ );
+    return;
+  }
 
   logFileUpdated = TRUE; // set flag
 
@@ -393,16 +397,16 @@ void flushLogFileBuffer( void )
 
 /**
 */
-int flushRecvBuffer( int socket )
+int flushRecvBuffer( int socket, uint16_t cnt )
 {
   uint16_t recvCnt = 0;
-  char buf[SCANNER_RECV_BUF_SZ] = { 0 };
+  char buf[COMMON_RECV_BUF_SZ] = { 0 };
 
-  fprintf( stderr, "Flushing receive buffer\n" );
+  // fprintf( stderr, "Flushing receive buffer\n" );
 
   while( recv( socket, buf, sizeof( buf ), 0 ) < 0 ) {
     recvCnt++;
-    if( recvCnt >= SCANNER_MAX_RECV_CNT ) break;
+    if( recvCnt >= cnt ) break;
     usleep( SLEEP_10MS );
   }
 
@@ -432,6 +436,7 @@ unsigned int getTimeDeltaMS( unsigned int t0, unsigned int t1 )
 }
 
 /**
+  deprecated
 */
 /*
 void dwExit( int status )
@@ -574,6 +579,41 @@ int setState( int state, int param )
 
   printLog( "%s: state [%d], param [%d] set %s\n"
           , __func__, state, param, (retVal == AWS_SUCCESS) ? "OK" : "Fail" );
+
+  return( retVal );
+}
+
+/**
+*/
+int setStateCurrTime()
+{
+  int retVal = AWS_SUCCESS;
+  FILE *fp = NULL;
+
+  static unsigned int t0 = 0; // start time
+  unsigned int t1 = 0; // end time
+
+  time_t T = time( NULL );
+  struct tm tm = *localtime( &T );
+  char timestr[TIME_STR_SZ + PREFIX_SZ] = { 0 };
+  struct timeval tsRawtime;
+
+  t1 = millis();
+
+  if( getTimeDeltaMS( t0, t1 ) >= STATE_CURR_TIME_REFRESH ) {
+    if(( fp = fopen( FILE_STATE_CURR_TIME, "w" ))) {
+      gettimeofday( &tsRawtime, NULL );
+      sprintf( timestr, "%04d-%02d-%02d %02d:%02d:%02d"
+             , tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec );
+
+      fprintf( fp, "%s", timestr );
+      fclose( fp );
+    } else {
+      retVal = AWS_FAIL;
+    }
+
+    t0 = t1;
+  }
 
   return( retVal );
 }
