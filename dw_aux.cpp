@@ -43,7 +43,7 @@ static void ctrlCHandler( int signum )
   if( logFile ) fflush( logFile );
 
   (void)( signum );
-  exit( 0 );
+  exit( EXIT_SUCCESS );
 }
 
 /**
@@ -183,17 +183,17 @@ void closeAllSQLConnections( void )
   printLog( "Close SQL connections\n" );
 
   if( SQLConfigHandler ) {
-    printLog( "Connection to MySQL (station configuration) closed\n" );
+    printLog( "Connection to MySQL (%s) closed\n", MYSQL_CONFIG_LABEL );
     mysql_close( SQLConfigHandler );
   }
 
   if( SQLNewTUHandler ) {
-    printLog( "Connection to MySQL (new TU) closed\n" );
+    printLog( "Connection to MySQL (%s) closed\n", MYSQL_NEW_TU_LABEL );
     mysql_close( SQLNewTUHandler );
   }
 
   if( SQLCheckDBHandler ) {
-    printLog( "Connection to MySQL (check DB) closed\n" );
+    printLog( "Connection to MySQL (%s) closed\n", MYSQL_CHECK_DB_LABEL );
     mysql_close( SQLCheckDBHandler );
   }
 }
@@ -236,7 +236,7 @@ int openLog( void )
     logFile = fopen( logFileName, "w+" );
 
     if( logFile ) {
-    	return( AWS_SUCCESS ); // ok
+    	return( EXIT_SUCCESS ); // ok
     } else {
       fprintf( stderr, "\n[-] Failed to open file %s\n", logFileName );
       fprintf( stderr, "Error description is: %s\n", strerror( errno ));
@@ -247,7 +247,7 @@ int openLog( void )
     }
   }
 
-  return( AWS_FAIL ); // error
+  return( EXIT_FAIL ); // error
 }
 
 /**
@@ -311,7 +311,7 @@ void printLog( const char *format, ... )
       fprintf( logFile, "\n[-] %s: Failed to open file %s\n", __func__, errLogFileName );
       fprintf( stderr, "Error description is : %s\n", strerror( errno ));
       fprintf( logFile, "Error description is : %s\n", strerror( errno ));
-      exit( 1 );
+      dwExit( EXIT_FAIL );
 
     } else {
       fprintf( errLogFile, "%s", timestr );
@@ -371,7 +371,7 @@ void setNonblock( int socket )
 
   if( flags == -1 ) {
     printLog( "Error: (O_NONBLOCK) fcntl returns -1, exit\n" );
-    exit( 1 );
+    dwExit( EXIT_FAIL );
   }
 
   fcntl( socket, F_SETFL, flags | O_NONBLOCK );
@@ -436,30 +436,10 @@ unsigned int getTimeDeltaMS( unsigned int t0, unsigned int t1 )
 }
 
 /**
-  deprecated
-*/
-/*
-void dwExit( int status )
-{
-  printLog( "%s is going to restart\n", appName );
-
-  calcelAllThreads();
-  closeAllSockets();
-  closeAllSQLConnections();
-
-  curl_global_cleanup();
-
-  fflush( logFile );
-
-  exit( status );
-}
-*/
-
-/**
 */
 int cmdHandler( char *data )
 {
-  int retVal = AWS_SUCCESS;
+  int retVal = EXIT_SUCCESS;
   char cmd[CMD_SZ] = { 0 };
   char cmdParam[CMD_PARAM_SZ] = { 0 };
   char *sepPos = NULL;
@@ -476,11 +456,11 @@ int cmdHandler( char *data )
     strcpy( cmdParam, sepPos + 1 );  // + 1 to exclude separator
     printLog( "%s: Parsing: [%s] => [%s]\n" , __func__, cmd, cmdParam );
 
-    retVal = AWS_SUCCESS;
+    retVal = EXIT_SUCCESS;
   } else {
     printLog( "%s: Missing separator\n", __func__ );
 
-    retVal = AWS_FAIL;
+    retVal = EXIT_FAIL;
   }
 
   if( 0 == strcmp( cmd, CMD_RESTART_CMD )) {
@@ -496,7 +476,7 @@ int cmdHandler( char *data )
 */
 int setState( int state, int param )
 {
-  int retVal = AWS_SUCCESS;
+  int retVal = EXIT_SUCCESS;
   FILE *fp = NULL;
 
   switch( state ) {
@@ -505,7 +485,7 @@ int setState( int state, int param )
         ( param == STATE_PARAM_OK ) ? fprintf( fp, "OK" ) : fprintf( fp, "в процессе" );
         fclose( fp );
       } else {
-        retVal = AWS_FAIL;
+        retVal = EXIT_FAIL;
       }
       break;
 
@@ -514,7 +494,7 @@ int setState( int state, int param )
         ( param == STATE_PARAM_OK ) ? fprintf( fp, "OK" ) : fprintf( fp, "запускается" );
         fclose( fp );
       } else {
-        retVal = AWS_FAIL;
+        retVal = EXIT_FAIL;
       }
       break;
 
@@ -525,7 +505,7 @@ int setState( int state, int param )
         else if( param == STATE_PARAM_UNKNOWN ) fprintf( fp, "???" );
         fclose( fp );
       } else {
-        retVal = AWS_FAIL;
+        retVal = EXIT_FAIL;
       }
       break;
 
@@ -536,7 +516,7 @@ int setState( int state, int param )
         else if( param == STATE_PARAM_UNKNOWN ) fprintf( fp, "???" );
         fclose( fp );
       } else {
-        retVal = AWS_FAIL;
+        retVal = EXIT_FAIL;
       }
       break;
 
@@ -547,7 +527,7 @@ int setState( int state, int param )
         else if( param == STATE_PARAM_UNKNOWN ) fprintf( fp, "???" );
         fclose( fp );
       } else {
-        retVal = AWS_FAIL;
+        retVal = EXIT_FAIL;
       }
       break;
 
@@ -558,7 +538,7 @@ int setState( int state, int param )
         else if( param == STATE_PARAM_UNKNOWN ) fprintf( fp, "???" );
         fclose( fp );
       } else {
-        retVal = AWS_FAIL;
+        retVal = EXIT_FAIL;
       }
       break;
 
@@ -569,7 +549,7 @@ int setState( int state, int param )
         else if( param == STATE_PARAM_UNKNOWN ) fprintf( fp, "???" );
         fclose( fp );
       } else {
-        retVal = AWS_FAIL;
+        retVal = EXIT_FAIL;
       }
       break;
 
@@ -578,7 +558,7 @@ int setState( int state, int param )
   }
 
   printLog( "%s: state [%d], param [%d] set %s\n"
-          , __func__, state, param, (retVal == AWS_SUCCESS) ? "OK" : "Fail" );
+          , __func__, state, param, (retVal == EXIT_SUCCESS) ? "OK" : "Fail" );
 
   return( retVal );
 }
@@ -587,11 +567,11 @@ int setState( int state, int param )
 */
 int setStateCurrTime()
 {
-  int retVal = AWS_SUCCESS;
+  int retVal = EXIT_SUCCESS;
   FILE *fp = NULL;
 
   static unsigned int t0 = 0; // start time
-  unsigned int t1 = 0; // end time
+  unsigned int t1 = 0; // current time
 
   time_t T = time( NULL );
   struct tm tm = *localtime( &T );
@@ -600,7 +580,7 @@ int setStateCurrTime()
 
   t1 = millis();
 
-  if( getTimeDeltaMS( t0, t1 ) >= STATE_CURR_TIME_REFRESH ) {
+  if( getTimeDeltaMS( t0, t1 ) >= STATE_CURR_TIME_REFRESH_MS ) {
     if(( fp = fopen( FILE_STATE_CURR_TIME, "w" ))) {
       gettimeofday( &tsRawtime, NULL );
       sprintf( timestr, "%04d-%02d-%02d %02d:%02d:%02d"
@@ -609,11 +589,19 @@ int setStateCurrTime()
       fprintf( fp, "%s", timestr );
       fclose( fp );
     } else {
-      retVal = AWS_FAIL;
+      retVal = EXIT_FAIL;
     }
 
     t0 = t1;
   }
 
   return( retVal );
+}
+
+/**
+*/
+void dwExit( int status )
+{
+  printLog( "%s: shutdown with status %d\n", __func__, status );
+  running = FALSE;
 }

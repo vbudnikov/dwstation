@@ -12,7 +12,7 @@
 
 #include "dwstation.h"
 
-#define REQUEST_SELECT_NEW_TU "SELECT uid,barcode,weight,timestamp,status FROM T_dw00resp WHERE status=0 ORDER BY timestamp ASC limit 1"
+#define REQUEST_SELECT_NEW_TU   "SELECT uid,barcode,weight,timestamp,status FROM T_dw00resp WHERE status=0 ORDER BY timestamp ASC limit 1"
 
 MYSQL *SQLNewTUHandler = NULL;
 MYSQL *SQLCheckDBHandler = NULL;
@@ -117,7 +117,7 @@ void *connScannerLoop( void *arg )
 
   if( inet_pton( AF_INET, stationConfig.scannerIPAddr, &servAddr.sin_addr ) <= 0 ) {
     printLog( "Error: Invalid address/ Address not supported, exit\n" );
-    exit( 1 );
+    dwExit( EXIT_FAIL );
   }
 
   scannerConnected = FALSE; // volatile: need to initialize
@@ -127,7 +127,7 @@ void *connScannerLoop( void *arg )
     while( !scannerConnected ) {
      if(( scannerSocketFd = socket( AF_INET, SOCK_STREAM, 0 )) < 0 ) {
         printLog( "Error: Socket creation error, exit\n" );
-        exit( 1 );
+        dwExit( EXIT_FAIL );
       }
 
       printLog( "Trying to connect to the the scanner [%s:%s]\n"
@@ -139,7 +139,7 @@ void *connScannerLoop( void *arg )
         scannerConnected = FALSE;
         printLog( "Connection to scanner [%s:%s] failed: %s\n"
                 , stationConfig.scannerIPAddr, stationConfig.scannerPort, strerror( errno ));
-        shutdown( scannerSocketFd, SHUT_RDWR ); // test: shutdown
+        shutdown( scannerSocketFd, SHUT_RDWR );
         close( scannerSocketFd );
         setState( STATE_CONN_SCANNER, STATE_PARAM_NOTOK );
         usleep( SLEEP_2S );
@@ -166,7 +166,7 @@ void *connScannerLoop( void *arg )
   setState( STATE_CONN_SCANNER, STATE_PARAM_UNKNOWN );
 
   printLog( "Thread %s finished, exit\n", __func__  );
-  *retVal = AWS_FAIL;
+  *retVal = EXIT_FAIL;
   return( NULL );
 }
 
@@ -189,7 +189,7 @@ void *connWeigherLoop( void *arg )
 
   if( inet_pton( AF_INET, stationConfig.weigherIPAddr, &servAddr.sin_addr ) <= 0 ) {
     printLog( "Error: Invalid address/ Address not supported, exit\n" );
-    exit( 1 );
+    dwExit( EXIT_FAIL );
   }
 
   weigherConnected = FALSE; // volatile: need to initialize
@@ -199,7 +199,7 @@ void *connWeigherLoop( void *arg )
     while( !weigherConnected ) {
      if(( weigherSocketFd = socket( AF_INET, SOCK_STREAM, 0 )) < 0 ) {
         printLog( "Error: Socket creation error, exit\n" );
-        exit( 1 );
+        dwExit( EXIT_FAIL );
       }
 
       printLog( "Trying to connect to the the weigher [%s:%s]\n"
@@ -211,7 +211,7 @@ void *connWeigherLoop( void *arg )
         weigherConnected = FALSE;
         printLog( "Connection to weigher [%s:%s] failed: %s\n"
                 , stationConfig.weigherIPAddr, stationConfig.weigherPort, strerror( errno ));
-        shutdown( weigherSocketFd, SHUT_RDWR ); // test: shutdown
+        shutdown( weigherSocketFd, SHUT_RDWR );
         close( weigherSocketFd );
         setState( STATE_CONN_WEIGHER, STATE_PARAM_NOTOK );
         usleep( SLEEP_2S );
@@ -238,7 +238,7 @@ void *connWeigherLoop( void *arg )
   setState( STATE_CONN_WEIGHER, STATE_PARAM_UNKNOWN );
 
   printLog( "Thread %s finished, exit\n", __func__  );
-  *retVal = AWS_FAIL;
+  *retVal = EXIT_FAIL;
   return( NULL );
 }
 
@@ -340,7 +340,7 @@ void *scannerLoop( void *arg )
   } // while( TRUE )
 
   printLog( "Thread %s finished, exit\n", __func__  );
-  *retVal = AWS_FAIL;
+  *retVal = EXIT_FAIL;
   return( NULL );
 }
 
@@ -360,6 +360,8 @@ void *weigherLoop( void *arg )
   // unsigned int weight = 0;
   char *currWeight = NULL;
   char dquery[DYN_QUERY_SZ] = { 0 };
+  unsigned int checkSQLConnectionT0 = 0; // start time
+  unsigned int checkSQLConnectionT1 = 0; // current time
 
   printLog( "Starting %s\n", __func__ );
 
@@ -368,25 +370,25 @@ void *weigherLoop( void *arg )
    // connecting to MySQL
   if(( SQLNewTUHandler = mysql_init( NULL )) == NULL ) {
     isSQLInited = FALSE;
-    printLog( "SQL (new TU): init error: %s\n", mysql_error( SQLNewTUHandler ));
+    printLog( "SQL (%s): init error: %s\n", MYSQL_NEW_TU_LABEL, mysql_error( SQLNewTUHandler ));
   } else {
     isSQLInited = TRUE;
-    printLog( "SQL (new TU): init OK\n" );
+    printLog( "SQL (%s): init OK\n", MYSQL_NEW_TU_LABEL );
   }
 
   if( mysql_real_connect( SQLNewTUHandler, MYSQL_HOST, MYSQL_USER, MYSQL_PASSWORD, MYSQL_DB, 0, NULL, 0 ) == NULL ) {
     isSQLConnected = FALSE;
-    printLog( "SQL (new TU): connect error: %s\n", mysql_error( SQLNewTUHandler ));
+    printLog( "SQL (%s): connect error: %s\n", MYSQL_NEW_TU_LABEL, mysql_error( SQLNewTUHandler ));
   } else {
     isSQLConnected = TRUE;
-    printLog( "SQL (new TU): connect OK\n" );
+    printLog( "SQL (%s): connect OK\n", MYSQL_NEW_TU_LABEL );
   }
 
   // TODO: implement reconnection
   if( ! ( isSQLInited && isSQLConnected )) {
-    printLog( "SQL (new TU): error creating SQL connection, exit" );
+    printLog( "SQL (%s): error creating SQL connection, exit", MYSQL_NEW_TU_LABEL );
     setState( STATE_CONN_DB, STATE_PARAM_NOTOK );
-    exit( 1 );
+    dwExit( EXIT_FAIL );
   } else {
     setState( STATE_CONN_DB, STATE_PARAM_OK );
   }
@@ -400,9 +402,17 @@ void *weigherLoop( void *arg )
       }
     }
 
+    // getting MySQL connection status and reconnecting if necessary
+    checkSQLConnectionT1 = millis(); // set current time
+    if( !isSQLConnected || ( getTimeDeltaMS( checkSQLConnectionT0, checkSQLConnectionT1 ) >= MYSQL_CHECK_CONN_INTERVAL_MS )) {
+      isSQLConnected = checkSQLConnection( SQLNewTUHandler, MYSQL_NEW_TU_LABEL );
+
+      checkSQLConnectionT0 = checkSQLConnectionT1; // Update start time
+    }
+
     // sensor event
     if( sensorWeigherEventFlag ) {
-      sensorWeigherEventFlag = 0;
+      sensorWeigherEventFlag = FALSE;
 
       memset( currTUParam.weight, 0, sizeof( currTUParam.weight ));
       currWeight = getWeight( weigherSocketFd ); // getting weight
@@ -425,17 +435,21 @@ void *weigherLoop( void *arg )
       // check current TU: barcode and weight isn't empty
       if(( currTUParam.barcode[0] != '\0' ) && ( currTUParam.weight[0] != '\0' )) {
         sprintf( dquery, "INSERT INTO T_dw00resp (barcode,weight) values ('%s','%s')", currTUParam.barcode, currTUParam.weight );
-        printLog( "SQL (new TU): [%s]\n", dquery );
+        printLog( "SQL (%s): [%s]\n", MYSQL_NEW_TU_LABEL, dquery );
 
         if( mysql_query( SQLNewTUHandler, dquery )) {
-          printLog( "SQL (new TU): insert  error: %s\n", mysql_sqlstate( SQLNewTUHandler ));
           insertOK = FALSE;
         } else {
           insertOK = TRUE;
         }
 
         if( insertOK ) {
-          printLog( "SQL (new TU): insert OK\n" );
+          setState( STATE_CONN_DB, STATE_PARAM_OK );
+          printLog( "SQL (%s): insert OK\n", MYSQL_NEW_TU_LABEL );
+        } else {
+          isSQLConnected = FALSE;
+          setState( STATE_CONN_DB, STATE_PARAM_NOTOK );
+          printLog( "SQL (%s): insert  error: %s\n", MYSQL_NEW_TU_LABEL, mysql_sqlstate( SQLNewTUHandler ));
         }
       }
     }
@@ -450,7 +464,7 @@ void *weigherLoop( void *arg )
   }
 
   printLog( "Thread %s finished, exit\n", __func__  );
-  *retVal = AWS_FAIL;
+  *retVal = EXIT_FAIL;
   return( NULL );
 }
 
@@ -469,6 +483,8 @@ void *checkDBLoop( void *arg )
   int updateOK = FALSE;
   int recordFound = FALSE;
   unsigned int weightRecordNumFields = 0;
+  unsigned int checkSQLConnectionT0 = 0; // start time
+  unsigned int checkSQLConnectionT1 = 0; // current time
 
   printLog( "Starting %s\n", __func__ );
   setState( STATE_CONN_DB, STATE_PARAM_UNKNOWN );
@@ -486,26 +502,26 @@ void *checkDBLoop( void *arg )
 
    // connecting to MySQL
   if(( SQLCheckDBHandler = mysql_init( NULL )) == NULL ) {
-    printLog( "SQL (check DB): init error: %s\n", mysql_error( SQLCheckDBHandler ));
+    printLog( "SQL (%s): init error: %s\n", MYSQL_CHECK_DB_LABEL, mysql_error( SQLCheckDBHandler ));
     isSQLInited = FALSE;
   } else {
     isSQLInited = TRUE;
-    printLog( "SQL (check DB): init OK\n" );
+    printLog( "SQL (%s): init OK\n", MYSQL_CHECK_DB_LABEL );
   }
 
   if( mysql_real_connect( SQLCheckDBHandler, MYSQL_HOST, MYSQL_USER, MYSQL_PASSWORD, MYSQL_DB, 0, NULL, 0 ) == NULL ) {
-    printLog( "SQL (check DB): connect error: %s\n", mysql_error( SQLCheckDBHandler ));
+    printLog( "SQL (%s): connect error: %s\n", MYSQL_CHECK_DB_LABEL, mysql_error( SQLCheckDBHandler ));
     isSQLConnected = FALSE;
   } else {
     isSQLConnected = TRUE;
-    printLog( "SQL (check DB): connect OK\n" );
+    printLog( "SQL (%s): connect OK\n", MYSQL_CHECK_DB_LABEL );
   }
 
   // TODO: implement reconnection
   if( ! ( isSQLInited && isSQLConnected )) {
-    printLog( "SQL (check DB): error creating SQL connection, exit" );
+    printLog( "SQL (%s): error creating SQL connection, exit", MYSQL_CHECK_DB_LABEL );
     setState( STATE_CONN_DB, STATE_PARAM_NOTOK );
-    exit( 1 );
+    dwExit( EXIT_FAIL );
   } else {
     setState( STATE_CONN_DB, STATE_PARAM_OK );
   }
@@ -513,23 +529,31 @@ void *checkDBLoop( void *arg )
   printLog( "Checking the DB for new records\n" );
 
   while( TRUE ) {
-    // Getting weight data
-    if( isSQLInited && isSQLConnected ) {
-      // First not processed weight record
-      if( mysql_query( SQLCheckDBHandler, REQUEST_SELECT_NEW_TU )) {
-        selectOK = FALSE;
-        printLog( "SQL (check DB): select weight data error: %s\n", mysql_sqlstate( SQLCheckDBHandler ));
-      } else {
-        selectOK = TRUE; // Don't log this result
-      }
+    // getting MySQL connection status and reconnecting if necessary
+    checkSQLConnectionT1 = millis(); // set current time
+    if( !isSQLConnected || ( getTimeDeltaMS( checkSQLConnectionT0, checkSQLConnectionT1 ) >= MYSQL_CHECK_CONN_INTERVAL_MS )) {
+      isSQLConnected = checkSQLConnection( SQLCheckDBHandler, MYSQL_CHECK_DB_LABEL );
 
-      if( selectOK ) {
-        SQLSelectResult = mysql_store_result( SQLCheckDBHandler );
+      checkSQLConnectionT0 = checkSQLConnectionT1; // Update start time
+    }
 
-        if( SQLSelectResult == NULL ) {
-          printLog( "SQL (check DB): store result error: %s\n", mysql_sqlstate( SQLCheckDBHandler ));
-        }
+    // First not processed weight record
+    if( mysql_query( SQLCheckDBHandler, REQUEST_SELECT_NEW_TU )) {
+      selectOK = FALSE;
+    } else {
+      selectOK = TRUE; // Don't log this result
+    }
+
+    if( selectOK ) {
+      SQLSelectResult = mysql_store_result( SQLCheckDBHandler );
+
+      if( SQLSelectResult == NULL ) {
+        printLog( "SQL (%s): store result error: %s\n", MYSQL_CHECK_DB_LABEL, mysql_sqlstate( SQLCheckDBHandler ));
       }
+    } else {
+      isSQLConnected = FALSE;
+      setState( STATE_CONN_DB, STATE_PARAM_NOTOK );
+      printLog( "SQL (%s): select weight data error: %s\n", MYSQL_CHECK_DB_LABEL, mysql_sqlstate( SQLCheckDBHandler ));
     }
 
     if( SQLSelectResult ) {
@@ -538,15 +562,16 @@ void *checkDBLoop( void *arg )
 
       if( row ) {
         recordFound = TRUE;
-        printLog( "SQL (check DB): new record found\n" );
-
+        printLog( "SQL (%s): new record found\n", MYSQL_CHECK_DB_LABEL );
+        // TODO: else copy defaults
         if( row[UID_INDEX] )       strcpy( weightRecord.uid,       row[UID_INDEX] );
         if( row[BARCODE_INDEX] )   strcpy( weightRecord.barcode,   row[BARCODE_INDEX] );
         if( row[WEIGHT_INDEX] )    strcpy( weightRecord.weight,    row[WEIGHT_INDEX] );
         if( row[TIMESTAMP_INDEX] ) strcpy( weightRecord.timestamp, row[TIMESTAMP_INDEX] );
         if( row[STATUS_INDEX] )    strcpy( weightRecord.status,    row[STATUS_INDEX] );
 
-        printLog( "SQL (check DB): selected %d fields: [%s] [%s] [%s] [%s] [%s]\n"
+        printLog( "SQL (%s): selected %d fields: [%s] [%s] [%s] [%s] [%s]\n"
+                , MYSQL_CHECK_DB_LABEL
                 , weightRecordNumFields, weightRecord.uid, weightRecord.barcode
                 , weightRecord.weight, weightRecord.timestamp, weightRecord.status );
       } else {
@@ -565,7 +590,7 @@ void *checkDBLoop( void *arg )
       curl = curl_easy_init();
       if( curl == NULL ) {
         printLog( "Error: cURL init error, exit" );
-        exit( 1 );
+        dwExit( EXIT_FAIL );
       }
 
       slist = curl_slist_append( NULL, "" );
@@ -585,7 +610,7 @@ void *checkDBLoop( void *arg )
 
       /* pass in a pointer to the data - libcurl does not copy */
       // Example: { "ArrayData": [ {"Date": "2023-09-25 09:51:38", "ТЕ": "000025179223", "Weight": "1345" } ] }
-      sprintf( json, "{ \"ArrayData\": [ {\"Date\": \"%s\", \"TE\": \"%s\", \"Weight\": \"%s\"  } ] }"
+      sprintf( json, "{ \"ArrayData\": [ { \"Date\": \"%s\", \"TE\": \"%s\", \"Weight\": \"%s\" } ] }"
              , weightRecord.timestamp, weightRecord.barcode, weightRecord.weight );
       jsonLen = strlen( json );
 
@@ -643,7 +668,7 @@ void *checkDBLoop( void *arg )
   setState( STATE_CONN_HTTP, STATE_PARAM_UNKNOWN );
 
   printLog( "Thread %s finished, exit\n", __func__  );
-  *retVal = AWS_FAIL;
+  *retVal = EXIT_FAIL;
   return( NULL );
 }
 
@@ -659,7 +684,6 @@ void *msgQueueLoop( void *arg )
 
   printLog( "Starting %s\n", __func__ );
 
-  //  ###
   if( pthread_equal( id_, tid[THREAD_MSG_QUEUE] )) {
     if(( msqid = msgget( MQ_KEY, msgflg )) < 0 ) {
       perror("msgget");
@@ -683,7 +707,7 @@ void *msgQueueLoop( void *arg )
   }
 
   printLog( "Thread %s finished, exit\n", __func__ );
-  *retVal = AWS_FAIL;
+  *retVal = EXIT_FAIL;
   return NULL;
 }
 
@@ -753,4 +777,40 @@ char *getWeight( int socket )
   printLog( "%s: Final weight: [%s], ptr = [%s]\n", __func__, weight, ptr ); // ### FIXIT: remove print ptr
 
   return( ptr );
+}
+
+/**
+  return:   EXIT_SUCCESS - connection is OK or established
+            EXIT_FAIL - connection failed
+*/
+int checkSQLConnection( MYSQL *mysql, const char *label )
+{
+  int retVal = EXIT_SUCCESS;
+  const char *stat = NULL;
+  unsigned int error = 0;
+
+  stat = mysql_stat( mysql );
+  error = mysql_errno( mysql );
+
+  if( stat == NULL ) {
+    printLog( "%s: SQL (%s) stat error: %s\n", __func__, label ? label : "...", mysql_error( mysql ));
+    if( !error ) error = TRUE;
+  }
+
+  if( error ) {
+    if( stat ) printLog( "%s: SQL (%s): %s\n",  __func__, label ? label : "...", stat );
+
+    printLog( "%s: SQL (%s): Trying to connect\n",  __func__, label ? label : "..." );
+
+    if( mysql_real_connect( mysql, MYSQL_HOST, MYSQL_USER, MYSQL_PASSWORD, MYSQL_DB, 0, NULL, 0 ) == NULL ) {
+      retVal = EXIT_FAIL;
+      printLog( "%s: SQL (%s): connect error: %s\n", __func__, label ? label : "...", mysql_error( mysql ));
+      usleep( SLEEP_2S );
+    } else {
+      retVal = EXIT_SUCCESS;
+      printLog( "%s: SQL (%s): connect OK\n", __func__, label ? label : "..." );
+    }
+  }
+
+  return( retVal );
 }

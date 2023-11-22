@@ -41,9 +41,9 @@ int main( int argc, char **argv )
 
   handlersSetup();
 
-  if( openLog() == AWS_FAIL ) {
+  if( openLog() == EXIT_FAIL ) {
     fprintf( stderr, "Error: can't open log file, exit\n" );
-    exit( AWS_FAIL );
+    return( EXIT_FAIL ); // return
   }
 
   printLog( "Start %s, %s\n", appName, nowToday );
@@ -64,21 +64,19 @@ int main( int argc, char **argv )
 
   // Config from MySQL
   if(( SQLConfigHandler = mysql_init( NULL )) == NULL ) {
-    printLog( "SQL (config): init error: %s\n", mysql_error( SQLConfigHandler ));
+    printLog( "SQL (%s): init error: %s\n", MYSQL_CONFIG_LABEL, mysql_error( SQLConfigHandler ));
     isSQLInited = FALSE;
-    exit( AWS_FAIL );
   } else {
     isSQLInited = TRUE;
-    printLog( "SQL (config): init OK\n" );
+    printLog( "SQL (%s): init OK\n", MYSQL_CONFIG_LABEL );
   }
 
   if( mysql_real_connect( SQLConfigHandler, MYSQL_HOST, MYSQL_USER, MYSQL_PASSWORD, MYSQL_DB, 0, NULL, 0 ) == NULL ) {
-    printLog( "SQL (config): connect error: %s\n", mysql_error( SQLConfigHandler ));
+    printLog( "SQL (%s): connect error: %s\n", MYSQL_CONFIG_LABEL, mysql_error( SQLConfigHandler ));
     isSQLConnected = FALSE;
-    exit( AWS_FAIL );
   } else {
     isSQLConnected = TRUE;
-    printLog( "SQL (config): connect OK\n" );
+    printLog( "SQL (%s): connect OK\n", MYSQL_CONFIG_LABEL );
   }
 
   if( isSQLInited && isSQLConnected ) {
@@ -86,28 +84,28 @@ int main( int argc, char **argv )
     if( mysql_query( SQLConfigHandler
                   , "SELECT http_service_addr,login,password,user_id,scannerIPAddr,scannerPort,weigherIPAddr,weigherPort"
                     " FROM T_dw00conf ORDER BY timestamp DESC limit 1" )) {
-      printLog( "SQL (config): select error: %s\n", mysql_sqlstate( SQLConfigHandler ));
+      printLog( "SQL (%s): select error: %s\n", MYSQL_CONFIG_LABEL, mysql_sqlstate( SQLConfigHandler ));
       stationConfigSelectOK = FALSE;
     } else {
       stationConfigSelectOK = TRUE;
-      printLog( "SQL (config): select config OK\n" );
+      printLog( "SQL (%s): select config OK\n", MYSQL_CONFIG_LABEL );
     }
 
     if( stationConfigSelectOK ) {
       SQLSelectResult = mysql_store_result( SQLConfigHandler );
 
       if( SQLSelectResult == NULL ) {
-        printLog( "SQL (config): store config result error: %s\n", mysql_sqlstate( SQLConfigHandler ));
+        printLog( "SQL (%s): store config result error: %s\n", MYSQL_CONFIG_LABEL, mysql_sqlstate( SQLConfigHandler ));
       } else {
         stationConfigNumFields = mysql_num_fields( SQLSelectResult );
 
         if( stationConfigNumFields == ( CFG_LAST_INDEX )) {
           stationConfigOK = TRUE;
-          printLog( "SQL (config): station config OK\n" );
+          printLog( "SQL (%s): station config OK\n", MYSQL_CONFIG_LABEL );
           setState( STATE_CONFIG, STATE_PARAM_OK ); // set state
         } else {
           stationConfigOK = FALSE;
-          printLog( "SQL (config): station config error: wrong number of fields\n" );
+          printLog( "SQL (%s): station config error: wrong number of fields\n", MYSQL_CONFIG_LABEL );
           setState( STATE_CONFIG, STATE_PARAM_NOTOK ); // set state
         }
 
@@ -125,22 +123,22 @@ int main( int argc, char **argv )
             if( row[CFG_WEIGHER_PORT] )      strcpy( stationConfig.weigherPort,   row[CFG_WEIGHER_PORT] );
           } else {
             printLog( "SQL fetch row error, exit\n" );
-            exit( AWS_FAIL );
+            return( EXIT_FAIL );
           }
         } else {
           printLog( "SQL config structure error, exit\n" );
-          exit( AWS_FAIL );
+          return( EXIT_FAIL );
         }
 
         mysql_free_result( SQLSelectResult );
       }
     } else {
       printLog( "Error: Unable to get configuration from DB, exit\n" );
-      exit( AWS_FAIL );
+      return( EXIT_FAIL );
     }
   } else {
     printLog( "Error: SQL init or connect failed, exit\n" );
-    exit( AWS_FAIL );
+    return( EXIT_FAIL );
   }
 
   // station configuration has been successfully processed, you can close the connection to the database
@@ -186,12 +184,12 @@ int main( int argc, char **argv )
     flushLogFileBuffer();
     checkTimeLogReopen();
 
-    if( connScannerLoopParam == AWS_FAIL ) break;
-    if( connWeigherLoopParam == AWS_FAIL ) break;
-    if( scannerLoopParam     == AWS_FAIL ) break;
-    if( weigherLoopParam     == AWS_FAIL ) break;
-    if( checkDBLoopParam     == AWS_FAIL ) break;
-    if( msgQueueLoopParam    == AWS_FAIL ) break;
+    if( connScannerLoopParam == EXIT_FAIL ) break;
+    if( connWeigherLoopParam == EXIT_FAIL ) break;
+    if( scannerLoopParam     == EXIT_FAIL ) break;
+    if( weigherLoopParam     == EXIT_FAIL ) break;
+    if( checkDBLoopParam     == EXIT_FAIL ) break;
+    if( msgQueueLoopParam    == EXIT_FAIL ) break;
 
     if( !running ) {
       break;
@@ -216,7 +214,10 @@ int main( int argc, char **argv )
   closeAllSockets();
   closeAllSQLConnections();
 
-  fflush( logFile );
+  printLog( "The end\n  " );
 
-  return( AWS_SUCCESS );
+  fflush( logFile );
+  fclose( logFile );
+
+  return( EXIT_SUCCESS );
 }

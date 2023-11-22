@@ -19,8 +19,8 @@
 #endif // FALSE
 
 #define DEBUG                     FALSE
-#define AWS_SUCCESS               0
-#define AWS_FAIL                  1
+#define EXIT_SUCCESS              0
+#define EXIT_FAIL                 1
 
 #define THREAD_CONN_SCANNER       0
 #define THREAD_CONN_WEIGHER       1
@@ -28,7 +28,7 @@
 #define THREAD_WEIGHER            3
 #define THREAD_CHECK_DB           4
 #define THREAD_MSG_QUEUE          5
-#define THREADS_NUM               6 // Check this when adding new fields
+#define THREADS_NUM               6 // Check this when adding new fields, should be the last
 
 #define TIME_STR_SZ               32
 #define PREFIX_SZ                 16
@@ -59,7 +59,7 @@
 #define CFG_SCANNER_PORT          5
 #define CFG_WEIGHER_IP_ADDR       6
 #define CFG_WEIGHER_PORT          7
-#define CFG_LAST_INDEX            8 // Check this when adding new fields
+#define CFG_LAST_INDEX            8 // Check this when adding new fields, should be the last
 
 #define UID_INDEX                 0
 #define BARCODE_INDEX             1
@@ -74,6 +74,9 @@
 #define MYSQL_DB                  "dwstation"
 #define T_CONFIG                  "T_dw00conf"
 #define T_RESPONSE                "T_dw00resp"
+#define MYSQL_CONFIG_LABEL        "config"
+#define MYSQL_NEW_TU_LABEL        "new TU"
+#define MYSQL_CHECK_DB_LABEL      "check DB"
 
 // HTTP-server
 #define SERVER_ADDR_DEFAULT       "http://127.0.0.1\0"
@@ -153,7 +156,8 @@
 #define STATE_PARAM_NOTOK         1
 #define STATE_PARAM_UNKNOWN       2
 
-#define STATE_CURR_TIME_REFRESH   ( 10 * 1000 ) // 10s
+#define STATE_CURR_TIME_REFRESH_MS   ( 10 * 1000 ) // 10s
+#define MYSQL_CHECK_CONN_INTERVAL_MS ( 10 * 1000 ) // 10s
 
 #define FILE_STATE_BOOTING        "/mnt/ramdisk/dwstation/state/booting.txt"     // "/mnt/ssd/dwstation/state/booting.txt"
 #define FILE_STATE_STARTING       "/mnt/ramdisk/dwstation/state/starting.txt"    // "/mnt/ssd/dwstation/state/starting.txt"
@@ -218,6 +222,7 @@ void *msgQueueLoop( void *arg );
 
 void setNonblock( int socket );
 char *getWeight( int socket );
+int checkSQLConnection( MYSQL *mysq, const char *label );
 
 // aux
 extern FILE *logFile;
@@ -229,7 +234,7 @@ int checkTimeLogReopen( void );
 void printLog( const char *format, ... );
 void flushLogFileBuffer( void );
 unsigned int getTimeDeltaMS( unsigned int t0, unsigned int t1 );
-// void dwExit( int status ); // deprecated
+void dwExit( int status ); // TODO:
 int cmdHandler( char *data );
 void calcelAllThreads( void );
 void closeAllSockets( void );
