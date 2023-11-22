@@ -5,6 +5,9 @@
 
 #include "dwstation.h"
 
+#define REQUEST_SELECT_CONFIG   "SELECT http_service_addr,login,password,user_id,scannerIPAddr,scannerPort,weigherIPAddr,weigherPort" \
+                                " FROM T_dw00conf WHERE optionID=1 ORDER BY timestamp DESC limit 1"
+
 volatile int running = TRUE;
 const char *nowToday = "Build " __DATE__ " " __TIME__;
 const char *appName  = "dwstation";
@@ -81,9 +84,7 @@ int main( int argc, char **argv )
 
   if( isSQLInited && isSQLConnected ) {
     // Getting config data
-    if( mysql_query( SQLConfigHandler
-                  , "SELECT http_service_addr,login,password,user_id,scannerIPAddr,scannerPort,weigherIPAddr,weigherPort"
-                    " FROM T_dw00conf ORDER BY timestamp DESC limit 1" )) {
+    if( mysql_query( SQLConfigHandler, REQUEST_SELECT_CONFIG  )) {
       printLog( "SQL (%s): select error: %s\n", MYSQL_CONFIG_LABEL, mysql_sqlstate( SQLConfigHandler ));
       stationConfigSelectOK = FALSE;
     } else {
@@ -121,6 +122,10 @@ int main( int argc, char **argv )
             if( row[CFG_SCANNER_PORT] )      strcpy( stationConfig.scannerPort,   row[CFG_SCANNER_PORT] );
             if( row[CFG_WEIGHER_IP_ADDR] )   strcpy( stationConfig.weigherIPAddr, row[CFG_WEIGHER_IP_ADDR] );
             if( row[CFG_WEIGHER_PORT] )      strcpy( stationConfig.weigherPort,   row[CFG_WEIGHER_PORT] );
+
+            printLog( "Config: [%s] [%s] [%s] [%s] [%s] [%s] [%s] [%s]\n"
+                    , row[CFG_SERVER_ADDR_INDEX], row[CFG_LOGIN_INDEX], row[CFG_PASSWORD_INDEX], row[CFG_USER_ID_INDEX]
+                    , row[CFG_SCANNER_IP_ADDR], row[CFG_SCANNER_PORT], row[CFG_WEIGHER_IP_ADDR], row[CFG_WEIGHER_PORT] );
           } else {
             printLog( "SQL fetch row error, exit\n" );
             return( EXIT_FAIL );

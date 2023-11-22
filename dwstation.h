@@ -115,6 +115,7 @@
 #define WEIGHT_NOCONN             "NoConn\0"
 #define WEIGHT_WRONG_FORMAT       "WrFormat\0"
 #define WEIGHT_ERROR              "Error\0"
+#define WEIGHT_CORRECTION_VALUE   6
 
 #define CHECK_DB_DELAY            ( 500 * 1000 ) // 500ms
 
@@ -144,6 +145,8 @@
 #define CMD_SHUTDOWN_CMD          "shutdown"
 #define CMD_SHUTDOWN_PARAM        "TRUE"
 
+#define SYSTEM_CMD_SHUTDOWN       "poweroff -p"
+
 #define STATE_BOOTING             0
 #define STATE_STARTING            1
 #define STATE_CONFIG              2
@@ -157,7 +160,7 @@
 #define STATE_PARAM_UNKNOWN       2
 
 #define STATE_CURR_TIME_REFRESH_MS   ( 10 * 1000 ) // 10s
-#define MYSQL_CHECK_CONN_INTERVAL_MS ( 10 * 1000 ) // 10s
+#define MYSQL_CHECK_CONN_INTERVAL_MS ( 3600 * 1000 ) // 3600s
 
 #define FILE_STATE_BOOTING        "/mnt/ramdisk/dwstation/state/booting.txt"     // "/mnt/ssd/dwstation/state/booting.txt"
 #define FILE_STATE_STARTING       "/mnt/ramdisk/dwstation/state/starting.txt"    // "/mnt/ssd/dwstation/state/starting.txt"

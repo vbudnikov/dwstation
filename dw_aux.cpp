@@ -467,6 +467,12 @@ int cmdHandler( char *data )
     if( 0 == strcmp( cmdParam, CMD_RESTART_PARAM )) {
       running = FALSE;
     }
+  } else if( 0 == strcmp( cmd, CMD_SHUTDOWN_CMD )) {
+    if( 0 == strcmp( cmdParam, CMD_SHUTDOWN_PARAM )) {
+      system( SYSTEM_CMD_SHUTDOWN );
+      usleep( SLEEP_10MS );
+      running = FALSE;
+    }
   }
 
   return retVal;

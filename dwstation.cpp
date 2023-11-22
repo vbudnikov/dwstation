@@ -723,6 +723,7 @@ char *getWeight( int socket )
   char rawWeight[WEIGHT_LEN] = { 0 };
   char *ptr = NULL;
   size_t weightLen = 0;
+  unsigned int weightInt = 0;
 
   printLog( "%s: > Read\n", __func__ );
   recvCnt = 0;
@@ -760,6 +761,11 @@ char *getWeight( int socket )
 
           weightLen = strlen( ptr );
           strncpy( weight, ptr, weightLen);
+
+          weightInt = atoi( weight );
+          weightInt += WEIGHT_CORRECTION_VALUE; // adding vorrection value // TODO: add to config
+          sprintf( weight, "%u", weightInt );
+          weightLen = strlen( weight );
           weight[weightLen] = '\0';
         } else {
           strcpy( weight, WEIGHT_WRONG_FORMAT );
